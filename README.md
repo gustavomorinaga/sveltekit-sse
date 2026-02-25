@@ -58,6 +58,40 @@ Complete and type-safe **Server-Sent Events (SSE)** implementation for **Svelte 
 - ✅ Compatible with proxies and CDNs
 - ✅ Better for unidirectional communication
 
+## 🔍 How It Works
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant C as Client (sse.hook.svelte.ts)
+  participant S as Server (+server.ts)
+
+  Note over C,S: Connection Establishment (Handshake)
+  C->>+S: HTTP GET /api/events (Accept: text/event-stream)
+  S-->>C: HTTP 200 OK (Content-Type: text/event-stream)
+
+  Note over C,S: Persistent Stream Opened
+
+  S->>C: data: {"id": "1", "msg": "Connected"} \n\n
+  Note right of C: SSEClient class receives via EventSource
+  Note right of C: Triggers onMessage() -> Updates $state
+
+  S->>C: : keep-alive (empty comment to prevent proxy timeout)
+
+  rect rgba(0, 0, 0, 0.25)
+    Note right of S: Async event triggered on server-side
+    S->>C: event: notification\ndata: {"id": "2", "text": "New Alert"}\n\n
+  end
+
+  Note over C,S: Resilience & Auto-Reconnection
+  S-xC: Connection lost (Network drop / Server restart)
+  Note left of C: SSEClient detects failure (onerror)
+  C->>C: Wait 3000ms (reconnectWait)
+
+  C->>+S: HTTP GET /api/events (Last-Event-ID: 2)
+  S-->>C: Connection restored
+```
+
 ## ⚙️ Prerequisites
 
 Before you begin, make sure you have installed:
