@@ -1,50 +1,28 @@
-export interface SSEOptions<T> {
-  eventName?: string;
+// biome-ignore lint/suspicious/noExplicitAny: Generic type needs to accept any shape of topics map
+export interface SSEOptions<TTopics extends Record<string, any>> {
+  topics: { [K in keyof TTopics]?: (data: TTopics[K]) => void };
   reconnectWait?: number;
   autoConnect?: boolean;
-  onMessage?: (data: T) => void;
+  debug?: boolean;
 }
 
-/**
- * Manages a client-side Server-Sent Events (SSE) connection with reactive state,
- * automatic reconnection, and typed message parsing.
- *
- * @typeParam T - The shape of parsed SSE message data.
- *
- * @remarks
- * - Uses `EventSource` to establish a connection to the provided URL.
- * - Parses incoming event data as JSON and updates `data`.
- * - Automatically reconnects on error after `reconnectWait`.
- *
- * @example
- * ```ts
- * const client = new SSEClient<MyPayload>("/api/stream", {
- *   eventName: "message",
- *   reconnectWait: 5000,
- *   onMessage: (payload) => console.log(payload),
- * });
- * ```
- */
-export class SSEClient<T> {
-  data = $state<T | null>(null);
+// biome-ignore lint/suspicious/noExplicitAny: Generic type needs to accept any shape of topics map
+export class SSEClient<TTopics extends Record<string, any>> {
   status = $state<"idle" | "connecting" | "connected" | "error">("idle");
   error = $state<Error | null>(null);
 
-  readonly #url: string;
-  readonly #options: Required<SSEOptions<T>>;
+  readonly #baseURL: string;
+  readonly #options: SSEOptions<TTopics>;
   #eventSource: EventSource | null = null;
   #reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(url: string, options: SSEOptions<T> = {}) {
-    this.#url = url;
-    this.#options = {
-      eventName: "message",
-      reconnectWait: 3000,
-      autoConnect: true,
-      ...options,
-    } as Required<SSEOptions<T>>;
+  constructor(baseURL: string, options: SSEOptions<TTopics>) {
+    this.#baseURL = baseURL;
+    this.#options = { reconnectWait: 3000, autoConnect: true, ...options };
 
     if (this.#options.autoConnect) this.status = "connecting";
+
+    this.#log("SSEClient initialized", { baseURL, options });
 
     $effect(() => {
       if (this.#options.autoConnect) this.connect();
@@ -56,27 +34,38 @@ export class SSEClient<T> {
     this.close();
 
     this.status = "connecting";
-    this.#eventSource = new EventSource(this.#url);
+
+    const topicsKeys = Object.keys(this.#options.topics);
+    const url = new URL(this.#baseURL, location.origin);
+    for (const topic of topicsKeys) url.searchParams.append("topics", topic);
+
+    this.#log("Connecting to SSE", { url: url.toString(), topics: topicsKeys });
+
+    this.#eventSource = new EventSource(url.toString());
 
     this.#eventSource.onopen = () => {
       this.status = "connected";
       this.error = null;
+      this.#log("SSE connection opened");
     };
 
-    this.#eventSource.addEventListener(this.#options.eventName, (event) => {
-      try {
-        this.data = JSON.parse(event.data) as T;
-        this.#options.onMessage?.(this.data);
-      } catch (error) {
-        this.error = new Error(
-          `Error parsing SSE data: ${(error as Error).message}`
-        );
-      }
-    });
+    const topicsEntries = Object.entries(this.#options.topics) as [
+      keyof TTopics,
+      (data: TTopics[keyof TTopics]) => void,
+    ][];
+    for (const [topic, callback] of topicsEntries) {
+      this.#eventSource.addEventListener(topic as string, (event) => {
+        try {
+          const parsedData: TTopics[keyof TTopics] = JSON.parse(event.data);
+          this.#log(`Event received on topic "${topic as string}"`, parsedData);
+          callback(parsedData);
+        } catch (err) {
+          console.error("[SSE] Failed to parse message data:", err);
+        }
+      });
+    }
 
-    this.#eventSource.onerror = () => {
-      this.#handleError();
-    };
+    this.#eventSource.onerror = () => this.#handleError();
   };
 
   close = () => {
@@ -84,6 +73,7 @@ export class SSEClient<T> {
     if (this.#eventSource) {
       this.#eventSource.close();
       this.#eventSource = null;
+      this.#log("SSE connection closed");
     }
     this.status = "idle";
   };
@@ -91,12 +81,18 @@ export class SSEClient<T> {
   #handleError() {
     this.status = "error";
     this.error = new Error("Connection lost. Attempting to reconnect...");
-
+    this.#log("SSE connection error", {
+      reconnectIn: `${this.#options.reconnectWait}ms`,
+    });
     this.close();
-
     this.#reconnectTimer = setTimeout(
-      () => this.connect(),
+      this.connect,
       this.#options.reconnectWait
     );
+  }
+
+  #log(message: string, data?: unknown) {
+    if (!this.#options.debug) return;
+    console.log(`[SSE] ${message}`, data ?? "");
   }
 }

@@ -1,7 +1,17 @@
 const KEEP_ALIVE_INTERVAL_DURATION = 15_000;
 
-type SSEEmitter = (eventName: string, data: unknown) => void;
-type SSEProducer = (emit: SSEEmitter) => () => void;
+// biome-ignore lint/suspicious/noExplicitAny: Generic type needs to accept any shape of topics map
+type SSEEmitter<TTopics extends Record<string, any>> = <
+  K extends keyof TTopics,
+>(
+  eventName: K,
+  data: TTopics[K]
+) => void;
+
+// biome-ignore lint/suspicious/noExplicitAny: Generic type needs to accept any shape of topics map
+type SSEProducer<TTopics extends Record<string, any>> = (
+  emit: SSEEmitter<TTopics>
+) => () => void;
 
 /**
  * Creates a Server-Sent Events (SSE) response stream.
@@ -29,16 +39,19 @@ type SSEProducer = (emit: SSEEmitter) => () => void;
  * }
  * ```
  */
-export function produceSSE(producer: SSEProducer): Response {
+// biome-ignore lint/suspicious/noExplicitAny: Generic type needs to accept any shape of topics map
+export function produceSSE<TTopics extends Record<string, any>>(
+  producer: SSEProducer<TTopics>
+): Response {
   const encoder = new TextEncoder();
   let keepAliveInterval: ReturnType<typeof setInterval>;
   let cleanup: () => void;
 
   const stream = new ReadableStream({
     start(controller) {
-      const emit: SSEEmitter = (eventName, data) => {
+      const emit: SSEEmitter<TTopics> = (eventName, data) => {
         try {
-          const payload = `event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`;
+          const payload = `event: ${String(eventName)}\ndata: ${JSON.stringify(data)}\n\n`;
           controller.enqueue(encoder.encode(payload));
         } catch (error) {
           console.error("[SSE] Error emitting event:", error);
