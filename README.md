@@ -2726,10 +2726,11 @@ This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) f
 
 ⭐ **Made with ❤️ by [Gustavo Morinaga](https://gustavomorinaga.dev)**
 
-If you found this project helpful, please consider:
-- ⭐ Giving it a star on GitHub
-- 🐦 Sharing it on social media
-- 💬 Contributing with improvements or bug reports
+If you found this project helpful, please consider:  
+
+⭐ Giving it a star on GitHub\
+🐦 Sharing it on social media\
+💬 Contributing with improvements or bug reports
 
 **Happy coding!** 🚀
 
