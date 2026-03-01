@@ -291,54 +291,54 @@ pnpm preview
 sveltekit-sse/
 ├─ src/
 │  ├─ lib/
-│  │  ├─ components/              # Svelte components
+│  │  ├─ components/                           # Svelte components
 │  │  │  ├─ chat/
-│  │  │  │  ├─ chat.component.svelte      # Interactive chat UI
-│  │  │  │  └─ index.ts                   # Component exports
+│  │  │  │  ├─ chat.component.svelte           # Interactive chat UI
+│  │  │  │  └─ index.ts                        # Component exports
 │  │  │  ├─ notifications/
 │  │  │  │  ├─ notifications.component.svelte  # Notifications display
 │  │  │  │  └─ index.ts
 │  │  │  └─ toolbar/
-│  │  │      ├─ toolbar.component.svelte   # Connection status toolbar
+│  │  │      ├─ toolbar.component.svelte       # Connection status toolbar
 │  │  │      └─ index.ts
-│  │  ├─ contexts/                # Svelte 5 contexts
-│  │  │  └─ events.context.svelte.ts       # Global SSE state management
-│  │  ├─ hooks/                   # Custom Svelte hooks
-│  │  │  └─ sse.hook.svelte.ts             # Reactive SSE client class
-│  │  ├─ mock/                    # Mock data for demo
-│  │  │  ├─ chat.mock.ts                   # Story script data
-│  │  │  └─ notifications.mock.ts          # Sample notifications
-│  │  ├─ server/                  # Server-side utilities
-│  │  │  ├─ sse.ts                         # SSE response producer
-│  │  │  └─ story-engine.ts                # Chat story state machine
-│  │  └─ ts/                      # TypeScript definitions
-│  │      ├─ chat.ts                        # Chat message types
-│  │      ├─ notification.ts                # Notification types
-│  │      ├─ sse-topics.ts                  # SSE topics map (type-safe)
-│  │      └─ index.ts                       # Type exports
-│  ├─ routes/                      # SvelteKit routes
-│  │  ├─ +layout.svelte                     # Root layout
-│  │  ├─ +page.svelte                       # Home page (demo)
-│  │  ├─ layout.css                         # Global styles
-│  │  └─ api/                     # API endpoints
+│  │  ├─ contexts/                             # Svelte 5 contexts
+│  │  │  └─ events.context.svelte.ts           # Global SSE state management
+│  │  ├─ hooks/                                # Custom Svelte hooks
+│  │  │  └─ sse.hook.svelte.ts                 # Reactive SSE client class
+│  │  ├─ mock/                                 # Mock data for demo
+│  │  │  ├─ chat.mock.ts                       # Story script data
+│  │  │  └─ notifications.mock.ts              # Sample notifications
+│  │  ├─ server/                               # Server-side utilities
+│  │  │  ├─ sse.ts                             # SSE response producer
+│  │  │  └─ story-engine.ts                    # Chat story state machine
+│  │  └─ ts/                                   # TypeScript definitions
+│  │      ├─ chat.ts                           # Chat message types
+│  │      ├─ notification.ts                   # Notification types
+│  │      ├─ sse-topics.ts                     # SSE topics map (type-safe)
+│  │      └─ index.ts                          # Type exports
+│  ├─ routes/                                  # SvelteKit routes
+│  │  ├─ +layout.svelte                        # Root layout
+│  │  ├─ +page.svelte                          # Home page (demo)
+│  │  ├─ layout.css                            # Global styles
+│  │  └─ api/                                  # API endpoints
 │  │      ├─ chat/
-│  │      │  └─ +server.ts                 # HTTP POST for chat actions
+│  │      │  └─ +server.ts                     # HTTP POST for chat actions
 │  │      └─ events/
-│  │          └─ +server.ts                 # SSE endpoint (main)
-│  ├─ app.d.ts                     # TypeScript app definitions
-│  └─ app.html                     # HTML template
-├─ static/                          # Static assets
-│  ├─ assets/                                # Images, fonts, etc.
+│  │          └─ +server.ts                    # SSE endpoint (main)
+│  ├─ app.d.ts                                 # TypeScript app definitions
+│  └─ app.html                                 # HTML template
+├─ static/                                     # Static assets
+│  ├─ assets/                                  # Images, fonts, etc.
 │  └─ robots.txt
-├─ .nvmrc                           # Node version specification
-├─ biome.jsonc                      # Biome (linter/formatter) config
-├─ package.json                     # Dependencies and scripts
-├─ pnpm-lock.yaml                   # pnpm lock file
-├─ pnpm-workspace.yaml              # pnpm workspace configuration
-├─ svelte.config.js                 # SvelteKit configuration
-├─ tsconfig.json                    # TypeScript configuration
-├─ vite.config.ts                   # Vite configuration
-└─ README.md                        # This documentation
+├─ .nvmrc                                      # Node version specification
+├─ biome.jsonc                                 # Biome (linter/formatter) config
+├─ package.json                                # Dependencies and scripts
+├─ pnpm-lock.yaml                              # pnpm lock file
+├─ pnpm-workspace.yaml                         # pnpm workspace configuration
+├─ svelte.config.js                            # SvelteKit configuration
+├─ tsconfig.json                               # TypeScript configuration
+├─ vite.config.ts                              # Vite configuration
+└─ README.md                                   # This documentation
 ```
 
 ### Key Files Explained
