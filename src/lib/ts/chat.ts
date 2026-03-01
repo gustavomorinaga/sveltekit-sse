@@ -1,7 +1,20 @@
+export interface NPCMessage {
+  type: "npc";
+  name: string;
+  text: string;
+  delay: number;
+}
+
+export interface PromptMessage {
+  type: "prompt";
+  text: string;
+}
+
+export type StoryNode = NPCMessage | PromptMessage;
+
 export interface ChatMessage {
   id: string;
-  user: string;
-  message: string;
-  isMine?: boolean;
-  timestamp: string;
+  sender: string;
+  text: string;
+  isMe?: boolean;
 }

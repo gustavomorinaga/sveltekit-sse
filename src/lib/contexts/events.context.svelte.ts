@@ -4,14 +4,29 @@ import { resolve } from "$app/paths";
 import { SSEClient } from "$lib/hooks/sse.hook.svelte";
 import type { ChatMessage, Notification, SSETopicsMap } from "$lib/ts";
 
-const NOTIFICATIONS_LIMIT = 10;
+const NOTIFICATIONS_LIMIT = 5;
 
-export class EventsContext {
-  readonly streams = new SSEClient<SSETopicsMap>(resolve("/api/events"), {
+class EventsContext {
+  readonly stream = new SSEClient<SSETopicsMap>(resolve("/api/events"), {
     topics: {
-      chat: (data) => {
+      // Chat Events
+      message: (data) => this.chat.unshift(data),
+      prompt: (data) => (this.expectedPrompt = data.text),
+      end: (data) => {
+        // Check if the last message is already an end message to avoid duplicates (can happen on reconnect)
+        const lastMessage = this.chat.at(0);
+        const isDuplicateEndMessage =
+          lastMessage?.sender === "System" && lastMessage.text === data.text;
+        if (isDuplicateEndMessage) return;
+
         this.chat.unshift(data);
+        this.ended = true;
       },
+      history: (data) => {
+        // Restore chat history (reverse to maintain chronological order)
+        this.chat = [...data].reverse();
+      },
+      // Notifications Events
       notifications: (data) => {
         this.notifications.unshift(data);
         if (this.notifications.length > NOTIFICATIONS_LIMIT) {
@@ -21,7 +36,48 @@ export class EventsContext {
     },
   });
 
+  // Chat
+
   chat = $state<ChatMessage[]>([]);
+  expectedPrompt = $state<string | null>(null);
+  ended = $state<boolean>(false);
+
+  sendPrompt = async () => {
+    if (!this.expectedPrompt) return;
+
+    const promptText = this.expectedPrompt;
+
+    this.chat.unshift({
+      id: crypto.randomUUID(),
+      sender: "Player",
+      text: this.expectedPrompt,
+      isMe: true,
+    });
+
+    this.expectedPrompt = null;
+
+    await fetch(resolve("/api/chat"), {
+      method: "POST",
+      body: JSON.stringify({
+        action: "send_prompt",
+        message: promptText,
+      }),
+    });
+  };
+
+  resetChat = async () => {
+    this.chat = [];
+    this.expectedPrompt = null;
+    this.ended = false;
+
+    await fetch(resolve("/api/chat"), {
+      method: "POST",
+      body: JSON.stringify({ action: "reset" }),
+    });
+  };
+
+  // Notifications
+
   notifications = $state<Notification[]>([]);
 }
 

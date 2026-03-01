@@ -1,7 +1,7 @@
 const KEEP_ALIVE_INTERVAL_DURATION = 15_000;
 
 // biome-ignore lint/suspicious/noExplicitAny: Generic type needs to accept any shape of topics map
-type SSEEmitter<TTopics extends Record<string, any>> = <
+export type SSEEmitter<TTopics extends Record<string, any>> = <
   K extends keyof TTopics,
 >(
   eventName: K,
@@ -9,7 +9,7 @@ type SSEEmitter<TTopics extends Record<string, any>> = <
 ) => void;
 
 // biome-ignore lint/suspicious/noExplicitAny: Generic type needs to accept any shape of topics map
-type SSEProducer<TTopics extends Record<string, any>> = (
+export type SSEProducer<TTopics extends Record<string, any>> = (
   emit: SSEEmitter<TTopics>
 ) => () => void;
 

@@ -1,0 +1,100 @@
+import type { StoryNode } from "$lib/ts";
+
+export const SCRIPT: StoryNode[] = [
+  {
+    type: "npc",
+    name: "Guide",
+    text: "Welcome to the world of Eldoria, a land of magic and mystery.",
+    delay: 1500,
+  },
+  {
+    type: "npc",
+    name: "Guide",
+    text: "You are a young adventurer seeking your fortune.",
+    delay: 2000,
+  },
+  {
+    type: "npc",
+    name: "Guide",
+    text: "Your journey begins in the bustling town of Rivermoor.",
+    delay: 1500,
+  },
+  { type: "prompt", text: "*Explore the town*" },
+  {
+    type: "npc",
+    name: "Merchant",
+    text: "Ah, a new face! Care to browse my wares?",
+    delay: 1000,
+  },
+  {
+    type: "npc",
+    name: "Merchant",
+    text: "I have potions, weapons, and rare artifacts from distant lands.",
+    delay: 1500,
+  },
+  { type: "prompt", text: "*Ask about the forest*" },
+  {
+    type: "npc",
+    name: "Merchant",
+    text: "The forest is dangerous, filled with bandits and wild beasts.",
+    delay: 2000,
+  },
+  {
+    type: "npc",
+    name: "Merchant",
+    text: "But if you're brave enough, you might find hidden treasures.",
+    delay: 1500,
+  },
+  { type: "prompt", text: "*Head to the forest*" },
+  {
+    type: "npc",
+    name: "Guide",
+    text: "The forest is dark and eerie, with the sounds of creatures all around.",
+    delay: 2000,
+  },
+  {
+    type: "npc",
+    name: "Guide",
+    text: "As you venture deeper, you stumble upon an ancient ruin.",
+    delay: 1500,
+  },
+  { type: "prompt", text: "*Enter the ruin*" },
+  {
+    type: "npc",
+    name: "Guide",
+    text: "Inside the ruin, you find a mysterious artifact glowing with power.",
+    delay: 2000,
+  },
+  {
+    type: "npc",
+    name: "Guide",
+    text: "As you touch it, visions of a forgotten past flood your mind.",
+    delay: 1500,
+  },
+  { type: "prompt", text: "*Investigate the artifact*" },
+  {
+    type: "npc",
+    name: "Guide",
+    text: "The artifact reveals a hidden path leading to a secret chamber.",
+    delay: 2000,
+  },
+  {
+    type: "npc",
+    name: "Guide",
+    text: "Inside, you find a powerful relic that could change your destiny.",
+    delay: 1500,
+  },
+  { type: "prompt", text: "*Take the relic*" },
+  {
+    type: "npc",
+    name: "Guide",
+    text: "As you take the relic, a surge of energy courses through you.",
+    delay: 2000,
+  },
+  {
+    type: "npc",
+    name: "Guide",
+    text: "Your adventure has just begun, and the fate of Eldoria rests in your hands.",
+    delay: 1500,
+  },
+];

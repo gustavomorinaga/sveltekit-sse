@@ -6,6 +6,11 @@ import type { Notification } from "./notification";
  * This ensures type safety across the entire SSE implementation.
  */
 export interface SSETopicsMap {
+  // Chat-related topics
+  message: ChatMessage;
+  prompt: ChatMessage;
+  end: ChatMessage;
+  history: ChatMessage[];
+  // Notification-related topics
   notifications: Notification;
-  chat: ChatMessage;
 }
