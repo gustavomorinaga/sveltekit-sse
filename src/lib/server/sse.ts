@@ -1,11 +1,19 @@
 const KEEP_ALIVE_INTERVAL_DURATION = 15_000;
 
+export interface SSEEmitOptions<TTopics, K extends keyof TTopics> {
+  /** The event/topic name */
+  event: K;
+  /** The event data payload */
+  data: TTopics[K];
+  /** Optional unique ID for message recovery on reconnection */
+  id?: string;
+}
+
 // biome-ignore lint/suspicious/noExplicitAny: Generic type needs to accept any shape of topics map
 export type SSEEmitter<TTopics extends Record<string, any>> = <
   K extends keyof TTopics,
 >(
-  eventName: K,
-  data: TTopics[K]
+  options: SSEEmitOptions<TTopics, K>
 ) => void;
 
 // biome-ignore lint/suspicious/noExplicitAny: Generic type needs to accept any shape of topics map
@@ -31,7 +39,7 @@ export type SSEProducer<TTopics extends Record<string, any>> = (
  * export function GET() {
  *   return produceSSE((emit) => {
  *     const interval = setInterval(() => {
- *       emit('message', { timestamp: Date.now() });
+ *       emit({ event: 'message', data: { timestamp: Date.now() } });
  *     }, 1000);
  *
  *     return () => clearInterval(interval);
@@ -49,9 +57,11 @@ export function produceSSE<TTopics extends Record<string, any>>(
 
   const stream = new ReadableStream({
     start(controller) {
-      const emit: SSEEmitter<TTopics> = (eventName, data) => {
+      const emit: SSEEmitter<TTopics> = ({ event, data, id }) => {
         try {
-          const payload = `event: ${String(eventName)}\ndata: ${JSON.stringify(data)}\n\n`;
+          let payload = "";
+          if (id) payload += `id: ${id}\n`;
+          payload += `event: ${String(event)}\ndata: ${JSON.stringify(data)}\n\n`;
           controller.enqueue(encoder.encode(payload));
         } catch (error) {
           console.error("[SSE] Error emitting event:", error);
