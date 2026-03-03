@@ -5,8 +5,11 @@ Complete and type-safe **Server-Sent Events (SSE)** implementation for **Svelte 
 ## 📋 Table of Contents
 
 - [🚀 Key Features](#-key-features)
+- [⚡ Quickstart Guide](#-quickstart-guide)
 - [🛠️ Tech Stack](#️-tech-stack)
 - [🏗️ Architecture and Patterns](#️-architecture-and-patterns)
+- [🔥 Advanced Features](#-advanced-features)
+- [🏗️ Architecture Deep Dive](#️-architecture-deep-dive)
 - [📖 What is Server-Sent Events (SSE)?](#-what-is-server-sent-events-sse)
   - [🎯 Perfect Use Cases](#-perfect-use-cases)
   - [⚔️ SSE vs WebSocket vs Long Polling](#️-sse-vs-websocket-vs-long-polling)
@@ -35,7 +38,11 @@ Complete and type-safe **Server-Sent Events (SSE)** implementation for **Svelte 
 
 - ⚡ **Reactive SSE client** with Svelte 5 runes (`$state`, `$effect`)
 - 🎯 **Multi-topic support** — Subscribe to multiple event types in a single connection
-- 🔄 **Automatic reconnection** with configurable timeout and exponential backoff
+- 🔄 **Automatic reconnection** with message replay (no data loss on network issues)
+- 🧠 **Smart topic-safety analysis** — Detects new topics and replays full history for them
+- 🆔 **Global sequence IDs** — Monotonic message tracking for reliable state restoration
+- 🔄 **Dynamic topic updates** — Add/remove topics without losing connection state
+- 📊 **Per-topic message counters** — Reactive tracking of activity per topic
 - 🔒 **Type-safe** with TypeScript generics for each topic
 - 📡 **Automatic keep-alive** to maintain stable connections (15s interval)
 - 🎨 **State management** (idle, connecting, connected, error) with reactive properties
@@ -44,6 +51,167 @@ Complete and type-safe **Server-Sent Events (SSE)** implementation for **Svelte 
 - 🧹 **Automatic cleanup** of resources and subscriptions
 - 📦 **Zero external dependencies** (only Svelte and SvelteKit)
 - 🐛 **Debug mode** for development and troubleshooting
+
+## ⚡ Quickstart Guide
+
+Get SSE working in your SvelteKit project in 3 simple steps:
+
+### 1. Create the SSE Server Endpoint
+
+Create a file at `src/routes/api/events/+server.ts`:
+
+```typescript
+import type { RequestHandler } from './$types';
+
+// Define your event types
+interface SSETopics {
+  notification: { message: string; timestamp: number };
+  counter: { count: number };
+}
+
+export const GET: RequestHandler = () => {
+  const encoder = new TextEncoder();
+  
+  const stream = new ReadableStream({
+    start(controller) {
+      // Keep-alive mechanism
+      const keepAlive = setInterval(() => {
+        controller.enqueue(encoder.encode(': keep-alive\n\n'));
+      }, 15000);
+      
+      // Send a notification every 3 seconds
+      let count = 0;
+      const interval = setInterval(() => {
+        const notification = {
+          message: `Notification #${count}`,
+          timestamp: Date.now()
+        };
+        
+        const payload = `event: notification\ndata: ${JSON.stringify(notification)}\n\n`;
+        controller.enqueue(encoder.encode(payload));
+        
+        count++;
+      }, 3000);
+      
+      // Cleanup on disconnect
+      return () => {
+        clearInterval(keepAlive);
+        clearInterval(interval);
+      };
+    },
+  });
+  
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  });
+};
+```
+
+### 2. Create the SSE Client Hook
+
+Create a file at `src/lib/hooks/sse.hook.svelte.ts`:
+
+```typescript
+interface SSEOptions<TTopics> {
+  topics: { [K in keyof TTopics]?: (data: TTopics[K]) => void };
+  autoConnect?: boolean;
+  debug?: boolean;
+}
+
+export class SSEClient<TTopics extends Record<string, any>> {
+  status = $state<'idle' | 'connecting' | 'connected' | 'error'>('idle');
+  error = $state<Error | null>(null);
+  
+  #eventSource: EventSource | null = null;
+  #baseURL: string;
+  #options: SSEOptions<TTopics>;
+  
+  constructor(baseURL: string, options: SSEOptions<TTopics>) {
+    this.#baseURL = baseURL;
+    this.#options = { autoConnect: true, ...options };
+    
+    if (this.#options.autoConnect) {
+      $effect(() => {
+        this.connect();
+        return () => this.close();
+      });
+    }
+  }
+  
+  connect = () => {
+    if (this.#eventSource) return;
+    
+    this.status = 'connecting';
+    this.#eventSource = new EventSource(this.#baseURL);
+    
+    this.#eventSource.onopen = () => {
+      this.status = 'connected';
+      this.error = null;
+    };
+    
+    this.#eventSource.onerror = () => {
+      this.status = 'error';
+      this.error = new Error('Connection lost');
+    };
+    
+    // Subscribe to topics
+    for (const [topic, callback] of Object.entries(this.#options.topics)) {
+      this.#eventSource.addEventListener(topic, (event: MessageEvent) => {
+        const data = JSON.parse(event.data);
+        callback?.(data);
+      });
+    }
+  };
+  
+  close = () => {
+    this.#eventSource?.close();
+    this.#eventSource = null;
+    this.status = 'idle';
+  };
+}
+```
+
+### 3. Use in Your Component
+
+```svelte
+<script lang="ts">
+  import { SSEClient } from '$lib/hooks/sse.hook.svelte';
+  
+  interface SSETopics {
+    notification: { message: string; timestamp: number };
+  }
+  
+  let notifications = $state<{ message: string; timestamp: number }[]>([]);
+  
+  const stream = new SSEClient<SSETopics>('/api/events', {
+    topics: {
+      notification: (data) => {
+        notifications.push(data);
+        notifications = notifications.slice(-5); // Keep last 5
+      }
+    },
+    debug: true
+  });
+</script>
+
+<div>
+  <h2>Connection: {stream.status}</h2>
+  
+  {#each notifications as notif}
+    <div class="notification">
+      {notif.message} - {new Date(notif.timestamp).toLocaleTimeString()}
+    </div>
+  {/each}
+</div>
+```
+
+That's it! You now have a working SSE implementation. For production use with advanced features like message replay and dynamic topics, see the full implementation in this repository.
+
+---
 
 ## 🛠️ Tech Stack
 
@@ -74,6 +242,167 @@ This implementation follows modern web development patterns:
 - **♻️ Lifecycle management:** Automatic resource cleanup prevents memory leaks
 - **🎭 Topics-based:** Subscribe to multiple event types on a single connection
 - **🔐 Secure by default:** Works with SvelteKit's built-in authentication and session management
+
+## 🔥 Advanced Features
+
+This implementation goes beyond basic SSE with several production-ready features:
+
+### 1. Message Replay on Reconnection
+
+When a client reconnects (due to network issues or manual reconnection), the server automatically replays any missed messages:
+
+- **Global Sequence IDs**: Every message gets a monotonic ID that tracks its position in the event stream
+- **Last-Event-ID tracking**: The client remembers the last received message ID
+- **Smart replay**: On reconnect, only messages after the last ID are sent
+
+```typescript
+// Server automatically handles replay
+// Client receives:
+// id: 42
+// event: message
+// data: {"text": "Hello"}
+//
+// On reconnect with Last-Event-ID: 42
+// Client receives messages 43, 44, 45...
+```
+
+### 2. Topic Safety Analysis
+
+When clients dynamically add new topics to an existing connection, the server detects this and handles it intelligently:
+
+- **Existing topics**: Replay only missed messages (delta sync)
+- **New topics**: Replay complete history for that topic (full sync)
+
+```typescript
+// Initial connection: topics = ["chat"]
+// User enables notifications: topics = ["chat", "notifications"]
+// Server detects "notifications" is NEW
+// → Replays ALL notification history
+// → Replays only MISSED chat messages
+```
+
+This prevents data loss when users toggle features on/off.
+
+### 3. Dynamic Topic Updates
+
+Add or remove topics without losing your connection state:
+
+```typescript
+// Start with chat only
+const stream = new SSEClient<Topics>("/api/events", {
+  topics: {
+    chat: (msg) => console.log(msg)
+  }
+});
+
+// Later, add notifications dynamically
+stream.updateTopics({
+  addTopics: ["notifications"],
+  // Server will replay any missed notifications automatically
+});
+
+// Remove a topic
+stream.updateTopics({
+  removeTopics: ["chat"]
+});
+```
+
+### 4. Per-Topic Message Counters
+
+Track activity on each topic in real-time:
+
+```typescript
+const stream = new SSEClient<Topics>("/api/events", {
+  topics: {
+    chat: (msg) => console.log(msg),
+    notifications: (notif) => console.log(notif)
+  }
+});
+
+// Access reactive counters
+console.log(stream.topicCounters.chat); // 42
+console.log(stream.topicCounters.notifications); // 7
+```
+
+Perfect for showing unread counts or activity indicators in the UI.
+
+### 5. Session-Based History
+
+Server maintains a ring buffer of recent messages per session:
+
+```typescript
+// Server-side session management
+const session = {
+  id: sessionID,
+  history: [], // Ring buffer of recent messages
+  emitter: null, // Current SSE emitter
+};
+
+// Automatically persists messages
+function emitWithHistory({ event, data }) {
+  const message = {
+    id: globalSequenceID++,
+    topic: event,
+    data: data,
+    timestamp: Date.now(),
+  };
+  
+  session.history.push(message);
+  emit({ event, data, id: message.id });
+}
+```
+
+This enables:
+- State restoration after page refresh
+- Reliable message delivery even with flaky connections
+- No data loss during brief disconnections
+
+---
+
+## 🏗️ Architecture Deep Dive
+
+### Message Flow with Replay
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant S as Server
+  participant H as History Buffer
+
+  Note over C,S: Initial Connection
+  C->>S: GET /api/events?topics=chat
+  S->>H: Create session history
+  S-->>C: 200 OK (SSE stream)
+  
+  S->>H: Store message #1
+  S->>C: id: 1, event: chat, data: {...}
+  
+  S->>H: Store message #2
+  S->>C: id: 2, event: chat, data: {...}
+  
+  Note over C,S: Connection Lost
+  C-xS: Network error
+  S->>H: Store message #3
+  S->>H: Store message #4
+  
+  Note over C,S: Reconnect with Last-Event-ID
+  C->>S: GET /api/events?topics=chat<br/>Last-Event-ID: 2
+  S->>H: Query messages since ID 2
+  H-->>S: Messages 3, 4
+  S->>C: id: 3, event: chat, data: {...}
+  S->>C: id: 4, event: chat, data: {...}
+  Note over C: No messages lost!
+  
+  Note over C,S: Add New Topic
+  C->>C: User enables notifications
+  C->>S: GET /api/events?topics=chat,notifications<br/>lastEventID: 4
+  S->>S: analyzeTopicSafety()
+  Note right of S: "notifications" is NEW<br/>"chat" is SAFE
+  S->>H: Get ALL notifications
+  S->>H: Get chat messages since 4
+  S->>C: Full notification history
+  S->>C: Missed chat messages
+```
 
 ### Browser Compatibility
 
@@ -400,9 +729,6 @@ interface SSEOptions<TTopics> {
     [K in keyof TTopics]?: (data: TTopics[K]) => void;
   };
   
-  // Time to wait before reconnecting after error (milliseconds)
-  reconnectWait?: number; // default: 3000
-  
   // Automatically connect on instantiation
   autoConnect?: boolean; // default: true
   
@@ -421,6 +747,13 @@ client.status // "idle" | "connecting" | "connected" | "error"
 
 // Error object if status is "error" (reactive)
 client.error // Error | null
+
+// Last global sequence ID received (reactive)
+client.lastEventID // string | null
+
+// Per-topic message counters (reactive)
+client.topicCounters // Record<string, number>
+// Example: { chat: 42, notifications: 7 }
 ```
 
 ### Methods
@@ -431,6 +764,43 @@ client.connect();
 
 // Disconnect and cleanup
 client.close();
+
+// Dynamically update subscribed topics
+client.updateTopics({
+  addTopics?: ["newTopic1", "newTopic2"],
+  removeTopics?: ["oldTopic"],
+  // OR completely replace:
+  nextTopics?: { topic1: callback1, topic2: callback2 }
+});
+```
+
+### Dynamic Topic Updates Example
+
+```typescript
+const stream = new SSEClient<TopicsMap>("/api/events", {
+  topics: {
+    chat: (msg) => console.log("Chat:", msg)
+  }
+});
+
+// Later, user enables notifications
+stream.updateTopics({
+  addTopics: ["notifications"]
+});
+// Server will automatically replay missed notifications
+
+// User disables chat
+stream.updateTopics({
+  removeTopics: ["chat"]
+});
+
+// Or replace everything at once
+stream.updateTopics({
+  nextTopics: {
+    notifications: (notif) => console.log("Notification:", notif),
+    logs: (log) => console.log("Log:", log)
+  }
+});
 ```
 
 ### Complete Component Example
@@ -582,6 +952,10 @@ export function getEventsContext() {
 
 ## 🔧 Server API (produceSSE)
 
+### Basic Usage
+
+The `produceSSE` function creates a Server-Sent Events response stream with automatic keep-alive and proper cleanup.
+
 ### Creating an SSE Endpoint
 
 ```typescript
@@ -597,9 +971,13 @@ export const GET = () => {
   return produceSSE<TopicsMap>((emit) => {
     // Send events periodically
     const interval = setInterval(() => {
-      emit("message", {
-        id: crypto.randomUUID(),
-        text: "New message!",
+      emit({
+        event: "message",
+        data: {
+          id: crypto.randomUUID(),
+          text: "New message!",
+        },
+        id: String(Date.now()) // Optional: sequence ID for replay
       });
     }, 1000);
 
@@ -615,9 +993,17 @@ export const GET = () => {
 ### produceSSE Function Signature
 
 ```typescript
+interface SSEEmitOptions<TTopics, K extends keyof TTopics> {
+  /** The event/topic name */
+  event: K;
+  /** The event data payload */
+  data: TTopics[K];
+  /** Optional unique ID for message recovery on reconnection */
+  id?: string;
+}
+
 type SSEEmitter<TTopics> = <K extends keyof TTopics>(
-  eventName: K,
-  data: TTopics[K]
+  options: SSEEmitOptions<TTopics, K>
 ) => void;
 
 type SSEProducer<TTopics> = (
@@ -631,7 +1017,7 @@ function produceSSE<TTopics>(
 
 **Parameters:**
 - `producer`: Function that receives an `emit` callback and returns a cleanup function
-  - `emit(eventName, data)`: Sends a typed event to the client
+  - `emit({ event, data, id? })`: Sends a typed event to the client with optional sequence ID
   - `return`: Cleanup function executed when the connection is closed
 
 **Returns:**
@@ -644,6 +1030,108 @@ function produceSSE<TTopics>(
 - ✅ Keep-alive ping every 15 seconds (`: keep-alive\n\n`)
 - ✅ Proper cleanup on client disconnect
 - ✅ Error handling and logging
+- ✅ Message ID tracking for replay support
+
+### Advanced: Message Replay with History
+
+For production use, implement message replay to handle reconnections:
+
+```typescript
+import { produceSSE } from "$lib/server/sse";
+import { 
+  createEmitWithHistory, 
+  replayMissedMessages,
+  setTopicSubscription 
+} from "$lib/server/sse-helpers";
+
+export const GET = ({ cookies, request, url }) => {
+  const requestedTopics = url.searchParams.getAll("topics");
+  const lastEventID = 
+    request.headers.get("last-event-id") ?? 
+    url.searchParams.get("lastEventID");
+  
+  let sessionID = cookies.get("session_id");
+  if (!sessionID) {
+    sessionID = crypto.randomUUID();
+    cookies.set("session_id", sessionID, { path: "/" });
+  }
+
+  return produceSSE<TopicsMap>((emit) => {
+    // Wrap emitter to automatically track history
+    const emitWithHistory = createEmitWithHistory({ sessionID, emit });
+    
+    // Replay missed messages on reconnection
+    if (lastEventID) {
+      replayMissedMessages({
+        sessionID,
+        lastEventID,
+        requestedTopics,
+        emit
+      });
+    }
+    
+    // Remember current topics for next reconnection
+    setTopicSubscription(sessionID, requestedTopics);
+    
+    // Now emit using the history-aware wrapper
+    const interval = setInterval(() => {
+      emitWithHistory({
+        event: "message",
+        data: { text: "Hello" }
+        // ID is auto-assigned by createEmitWithHistory
+      });
+    }, 1000);
+    
+    return () => clearInterval(interval);
+  });
+};
+```
+
+### Helper Functions
+
+#### `createEmitWithHistory`
+
+Wraps your emitter to automatically persist messages to a session history buffer with global sequence IDs:
+
+```typescript
+const emitWithHistory = createEmitWithHistory({ sessionID, emit });
+
+// Every call is automatically stored with an ID
+emitWithHistory({ event: "chat", data: { text: "Hello" } });
+// → Stored as { id: "123", topic: "chat", data: {...}, timestamp: ... }
+// → Sent to client with id: 123
+```
+
+#### `replayMissedMessages`
+
+Intelligently replays messages based on topic safety analysis:
+
+```typescript
+replayMissedMessages({
+  sessionID,
+  lastEventID: "42",
+  requestedTopics: ["chat", "notifications"], // notifications is NEW
+  emit
+});
+
+// Behavior:
+// - "chat" was already subscribed → replay only messages > 42
+// - "notifications" is new → replay ALL notification history
+```
+
+#### `analyzeTopicSafety`
+
+Determines which topics are new vs. previously subscribed:
+
+```typescript
+const { safeTopics, newTopics } = analyzeTopicSafety(
+  sessionID,
+  ["chat", "notifications"]
+);
+
+// safeTopics: ["chat"] - was in previous connection
+// newTopics: ["notifications"] - newly added
+```
 
 ### Accessing Request Data
 
@@ -666,9 +1154,12 @@ export const GET = ({ cookies, url, request, locals }: RequestEvent) => {
     // Only send events for requested topics
     if (topics.includes("notifications")) {
       const interval = setInterval(() => {
-        emit("notifications", {
-          userId,
-          message: "New notification",
+        emit({
+          event: "notifications",
+          data: {
+            userId,
+            message: "New notification",
+          }
         });
       }, 5000);
       
@@ -698,7 +1189,7 @@ export const GET = ({ url }) => {
     // Chat messages (if requested)
     if (requestedTopics.includes("chat")) {
       const unsubscribeChat = subscribeToChat((message) => {
-        emit("chat", message);
+        emit({ event: "chat", data: message });
       });
       cleanupFunctions.push(unsubscribeChat);
     }
@@ -706,7 +1197,7 @@ export const GET = ({ url }) => {
     // Notifications (if requested)
     if (requestedTopics.includes("notifications")) {
       const unsubscribeNotif = subscribeToNotifications((notif) => {
-        emit("notifications", notif);
+        emit({ event: "notifications", data: notif });
       });
       cleanupFunctions.push(unsubscribeNotif);
     }
@@ -715,7 +1206,7 @@ export const GET = ({ url }) => {
     if (requestedTopics.includes("metrics")) {
       const metricsInterval = setInterval(async () => {
         const metrics = await getSystemMetrics();
-        emit("metrics", metrics);
+        emit({ event: "metrics", data: metrics });
       }, 5000);
       cleanupFunctions.push(() => clearInterval(metricsInterval));
     }
@@ -754,10 +1245,13 @@ export const GET = ({ locals }) => {
         snapshot.docChanges().forEach((change) => {
           if (change.type === "modified" || change.type === "added") {
             const order = change.doc.data();
-            emit("order", {
-              id: order.id,
-              status: order.status,
-              total: order.total,
+            emit({
+              event: "order",
+              data: {
+                id: order.id,
+                status: order.status,
+                total: order.total,
+              }
             });
           }
         });
@@ -803,7 +1297,7 @@ export const POST = async ({ request }) => {
 export const GET = () => {
   return produceSSE<TopicsMap>((emit) => {
     const handler = (data: TopicsMap["payment"]) => {
-      emit("payment", data);
+      emit({ event: "payment", data });
     };
     
     paymentEmitter.on("payment", handler);
@@ -815,16 +1309,17 @@ export const GET = () => {
 };
 ```
 
-## 📊 Demo: Interactive Chat + Notifications System
+## 📊 Demo: Interactive Chat + Notifications + Logs System
 
-This project includes a complete demo showcasing SSE capabilities with **two real-time features** running simultaneously:
+This project includes a complete demo showcasing SSE capabilities with **three real-time features** running simultaneously:
 
 ### 🎮 1. Interactive Story-based Chat
 
 An interactive text adventure that demonstrates:
 - **Bidirectional communication** (SSE for receiving, HTTP POST for sending)
 - **Session management** with cookies
-- **State restoration** on reconnection (chat history)
+- **Message replay** on reconnection (no lost messages)
+- **State restoration** after page refresh (chat history)
 - **Conditional prompts** (wait for user input)
 - **Timed events** (story progresses automatically)
 
@@ -832,32 +1327,57 @@ An interactive text adventure that demonstrates:
 
 ```typescript
 // src/routes/api/events/+server.ts
-export const GET = ({ cookies, url }) => {
+export const GET = ({ cookies, request, url }) => {
   const requestedTopics = url.searchParams.getAll("topics");
-  
+  const lastEventID =
+    request.headers.get("last-event-id") ?? url.searchParams.get("lastEventID");
+
   let sessionID = cookies.get("story_session");
   if (!sessionID) {
     sessionID = crypto.randomUUID();
     cookies.set("story_session", sessionID, { path: "/", httpOnly: true });
   }
 
+  const connectionType = lastEventID ? "RECONNECT" : "NEW";
+  console.log(`[SSE] ${connectionType} connection for session ${sessionID}`);
+
   return produceSSE<SSETopicsMap>((emit) => {
     const session = getSession(sessionID);
-    session.emitter = emit;
+    const emitWithHistory = createEmitWithHistory({ sessionID, emit });
 
-    if (requestedTopics.includes("message")) {
-      // Restore chat history on reconnect
-      if (session.history.length > 0) {
-        emit("history", session.history);
-      }
-      
-      // Continue story or wait for user input
-      playStory(sessionID);
+    session.emitter = emitWithHistory;
+
+    // Replay missed messages if reconnecting (topic-safety-aware)
+    if (lastEventID) {
+      replayMissedMessages({ sessionID, lastEventID, requestedTopics, emit });
     }
 
+    // Persist current topic subscription for next reconnect
+    setTopicSubscription(sessionID, requestedTopics);
+
+    // Handle chat topics if requested
+    const chatTopics = ["message", "prompt", "end", "history"];
+    const isChatTopicRequested = requestedTopics.some((topic) =>
+      chatTopics.includes(topic)
+    );
+
+    if (isChatTopicRequested) {
+      handleChatTopics({ sessionID, lastEventID, emitWithHistory, request });
+    }
+
+    // Setup polling for notifications and logs
+    const notificationsInterval = setupNotificationsPolling({
+      requestedTopics,
+      emitWithHistory,
+    });
+
+    const logsInterval = setupLogsPolling({ requestedTopics, emitWithHistory });
+
+    // Cleanup on disconnect
     return () => {
-      // Cleanup on disconnect
-      session.emitter = null;
+      if (session.timeoutID) clearTimeout(session.timeoutID);
+      clearInterval(notificationsInterval);
+      clearInterval(logsInterval);
     };
   });
 };
@@ -888,17 +1408,81 @@ export function playStory(sessionId: string) {
       text: node.text,
     };
     session.history.push(message);
-    session.emitter("message", message);
+    session.emitter({ event: "message", data: message });
     session.step++;
     session.timeoutID = setTimeout(() => playStory(sessionId), node.delay);
     
   } else if (node.type === "prompt") {
     // User input required - send prompt and wait
-    session.emitter("prompt", {
-      id: crypto.randomUUID(),
-      sender: "System",
-      text: node.text,
+    session.emitter({ 
+      event: "prompt", 
+      data: {
+        id: crypto.randomUUID(),
+        sender: "System",
+        text: node.text,
+      }
     });
+  }
+}
+```
+
+#### Client-side Context with Dynamic Topics
+
+```typescript
+// src/lib/contexts/events.context.svelte.ts
+class EventsContext {
+  readonly stream = new SSEClient<SSETopicsMap>(resolve("/api/events"), {
+    debug: dev,
+    topics: this.#buildTopicHandlers(["notifications", "logs"]),
+  });
+
+  activeTopics = new SvelteSet<StreamTopic>(["notifications", "logs"]);
+  
+  chat = $state<ChatMessage[]>([]);
+  notifications = $state<Notification[]>([]);
+  logs = $state<LogEntry[]>([]);
+
+  toggleTopic(topic: StreamTopic) {
+    if (this.activeTopics.has(topic)) {
+      this.activeTopics.delete(topic);
+      this.stream.updateTopics({ removeTopics: [topic] });
+    } else {
+      this.activeTopics.add(topic);
+      this.stream.updateTopics({
+        addTopics: [topic],
+        nextTopics: this.#buildTopicHandlers([...this.activeTopics])
+      });
+    }
+  }
+  
+  #buildTopicHandlers(streamTopics: StreamTopic[]) {
+    const handlers = {
+      // Chat handlers (always active)
+      message: (data) => this.chat.unshift(data),
+      prompt: (data) => (this.expectedPrompt = data.text),
+      end: (data) => {
+        this.chat.unshift(data);
+        this.ended = true;
+      },
+      history: (data) => (this.chat = [...data].reverse()),
+    };
+
+    // Optional stream handlers
+    if (streamTopics.includes("notifications")) {
+      handlers.notifications = (data) => {
+        this.notifications.unshift(data);
+        if (this.notifications.length > 5) this.notifications.pop();
+      };
+    }
+
+    if (streamTopics.includes("logs")) {
+      handlers.logs = (data) => {
+        this.logs.unshift(data);
+        if (this.logs.length > 30) this.logs.pop();
+      };
+    }
+
+    return handlers;
   }
 }
 ```
@@ -949,27 +1533,28 @@ export function playStory(sessionId: string) {
 
 ### 🔔 2. Real-Time Notifications
 
-Demonstrates periodic server-sent notifications:
+Demonstrates periodic server-sent notifications with topic toggling:
 
 #### Server
 
 ```typescript
 // Part of the same /api/events endpoint
-const notificationsInterval = setInterval(() => {
-  if (requestedTopics.includes("notifications")) {
-    const randomNotification = getRandomNotification();
-    
-    emit("notifications", {
-      id: crypto.randomUUID(),
-      ...randomNotification,
-      timestamp: new Date().toLocaleTimeString(),
-    });
-  }
-}, 3000); // Every 3 seconds
-
-return () => {
-  clearInterval(notificationsInterval);
-};
+export function setupNotificationsPolling({ requestedTopics, emitWithHistory }) {
+  return setInterval(() => {
+    if (requestedTopics.includes("notifications")) {
+      const randomNotification = getRandomNotification();
+      
+      emitWithHistory({
+        event: "notifications",
+        data: {
+          id: crypto.randomUUID(),
+          ...randomNotification,
+          timestamp: new Date().toLocaleTimeString(),
+        }
+      });
+    }
+  }, 3000); // Every 3 seconds
+}
 ```
 
 #### Client
@@ -979,13 +1564,18 @@ return () => {
 <script lang="ts">
   import { getEventsContext } from "$lib/contexts/events.context.svelte";
 
-  const { notifications } = getEventsContext();
+  const { notifications, stream, toggleTopic, activeTopics } = getEventsContext();
+  const isActive = $derived(activeTopics.has("notifications"));
+  const count = $derived(stream.topicCounters.notifications ?? 0);
 </script>
 
 <section class="notifications">
   <header>
     <h3>🔔 Notifications</h3>
-    <span class="count">{notifications.length}</span>
+    <button onclick={() => toggleTopic("notifications")}>
+      {isActive ? "Disable" : "Enable"}
+    </button>
+    <span class="count">{count} total</span>
   </header>
 
   <ul>
@@ -999,27 +1589,73 @@ return () => {
 </section>
 ```
 
+### 📝 3. Real-Time Logs
+
+Demonstrates a third topic that can be toggled independently:
+
+```typescript
+// Server
+export function setupLogsPolling({ requestedTopics, emitWithHistory }) {
+  return setInterval(() => {
+    if (requestedTopics.includes("logs")) {
+      const randomLog = getRandomLog();
+      
+      emitWithHistory({
+        event: "logs",
+        data: {
+          id: crypto.randomUUID(),
+          ...randomLog,
+          timestamp: Date.now(),
+        }
+      });
+    }
+  }, 2000); // Every 2 seconds
+}
+```
+
 ### 🎯 Key Learnings from the Demo
 
 1. **Multiple Topics in One Connection**
-   - Both chat and notifications use the same SSE connection
+   - Chat, notifications, and logs use the same SSE connection
    - Topics are filtered server-side based on URL parameters
    - Reduces overhead compared to multiple connections
+   - Can dynamically add/remove topics without reconnecting
 
-2. **Session Persistence**
-   - Chat history survives page reloads
-   - Server maintains state per session
-   - Reconnection restores full context
+2. **Message Replay on Reconnection**
+   - No messages are lost during brief disconnections
+   - Server tracks global sequence IDs for all messages
+   - Client sends Last-Event-ID on reconnect
+   - Server replays all missed messages in order
 
-3. **Hybrid Communication**
-   - SSE for server → client (messages, notifications)
-   - HTTP POST for client → server (user responses)
+3. **Topic Safety Analysis**
+   - When adding new topics, server detects this automatically
+   - New topics get full history replay
+   - Existing topics only get delta (missed messages)
+   - Prevents data inconsistency across topic changes
+
+4. **Session Persistence**
+   - Chat history survives page reloads and reconnections
+   - Server maintains state per session with cookies
+   - Reconnection restores full context automatically
+   - Ring buffer keeps recent history for each session
+
+5. **Hybrid Communication**
+   - SSE for server → client (messages, notifications, logs)
+   - HTTP POST for client → server (user responses, actions)
    - Best of both worlds for interactive apps
+   - Lower overhead than WebSocket for one-way streams
 
-4. **Proper Resource Management**
-   - Cleanup functions clear intervals
+6. **Proper Resource Management**
+   - Cleanup functions clear intervals and timeouts
    - Session state is properly managed
    - No memory leaks on disconnect
+   - Per-topic counters track activity
+
+7. **Dynamic UI Updates**
+   - Users can enable/disable notifications and logs
+   - Topic changes trigger smart reconnection
+   - Reactive counters show per-topic activity
+   - Connection status is always visible
 
 ## 🎯 Use Cases and Patterns
 
@@ -1046,13 +1682,16 @@ export const GET = () => {
     // Send metrics every 2 seconds
     const metricsInterval = setInterval(async () => {
       const metrics = await getSystemMetrics();
-      emit("metrics", metrics);
+      emit({ event: "metrics", data: metrics });
       
       // Send alert if CPU is high
       if (metrics.cpu > 80) {
-        emit("alerts", {
-          level: "warning",
-          message: `High CPU usage: ${metrics.cpu}%`,
+        emit({
+          event: "alerts",
+          data: {
+            level: "warning",
+            message: `High CPU usage: ${metrics.cpu}%`,
+          }
         });
       }
     }, 2000);
@@ -1104,15 +1743,15 @@ export const GET = ({ locals }) => {
     
     // Subscribe to relevant activities
     const unsubscribeLikes = subscribeToLikes(userId, (like) => {
-      emit("like", like);
+      emit({ event: "like", data: like });
     });
     
     const unsubscribeComments = subscribeToComments(userId, (comment) => {
-      emit("comment", comment);
+      emit({ event: "comment", data: comment });
     });
     
     const unsubscribeFollows = subscribeToFollows(userId, (follow) => {
-      emit("follow", follow);
+      emit({ event: "follow", data: follow });
     });
 
     return () => {
@@ -1182,21 +1821,24 @@ export const GET = ({ url, locals }) => {
     
     // Task progress updates
     task.on("progress", (data) => {
-      emit("progress", {
-        taskId,
-        percent: data.percent,
-        step: data.step,
+      emit({
+        event: "progress",
+        data: {
+          taskId,
+          percent: data.percent,
+          step: data.step,
+        }
       });
     });
     
     // Task completion
     task.on("complete", (result) => {
-      emit("complete", { taskId, result });
+      emit({ event: "complete", data: { taskId, result } });
     });
     
     // Task errors
     task.on("error", (error) => {
-      emit("error", { taskId, error: error.message });
+      emit({ event: "error", data: { taskId, error: error.message } });
     });
 
     return () => task.cleanup();
@@ -1268,15 +1910,15 @@ export const GET = ({ url, locals }) => {
     
     // Subscribe to other users' activities
     const unsubPresence = subscribeToPresence(documentId, (data) => {
-      if (data.userId !== userId) emit("presence", data);
+      if (data.userId !== userId) emit({ event: "presence", data });
     });
     
     const unsubCursors = subscribeToCursors(documentId, (data) => {
-      if (data.userId !== userId) emit("cursor", data);
+      if (data.userId !== userId) emit({ event: "cursor", data });
     });
     
     const unsubEdits = subscribeToEdits(documentId, (data) => {
-      if (data.userId !== userId) emit("edit", data);
+      if (data.userId !== userId) emit({ event: "edit", data });
     });
 
     return () => {
@@ -1325,13 +1967,16 @@ export const POST = async ({ request }) => {
         const token = chunk.choices[0]?.delta?.content || "";
         if (token) {
           fullText += token;
-          emit("token", { text: token, index: index++ });
+          emit({ event: "token", data: { text: token, index: index++ } });
         }
       }
       
-      emit("complete", {
-        fullText,
-        tokensUsed: index,
+      emit({
+        event: "complete",
+        data: {
+          fullText,
+          tokensUsed: index,
+        }
       });
     })();
 
@@ -1397,7 +2042,7 @@ export const GET = async ({ locals, cookies }: RequestEvent) => {
     
     // Only send events relevant to this user
     const unsubscribe = subscribeToUserEvents(userId, (event) => {
-      emit("notification", event);
+      emit({ event: "notification", data: event });
     });
 
     return unsubscribe;
@@ -1460,8 +2105,11 @@ export const GET = () => {
   return produceSSE<TopicsMap>((emit) => {
     // Auto-close after timeout
     const timeout = setTimeout(() => {
-      emit("timeout", { 
-        message: "Connection expired. Please reconnect.",
+      emit({
+        event: "timeout",
+        data: { 
+          message: "Connection expired. Please reconnect.",
+        }
       });
       // Connection will be closed automatically
     }, MAX_CONNECTION_TIME);
@@ -1516,14 +2164,17 @@ export const GET = ({ locals }) => {
     
     const unsubscribe = db.users.onChange((user) => {
       // ❌ BAD: Sending everything
-      // emit("user", user);
+      // emit({ event: "user", data: user });
       
       // ✅ GOOD: Only send what's needed
-      emit("user", {
-        id: user.id,
-        name: user.name,
-        avatar: user.avatar,
-        // Don't send: password, email, tokens, etc.
+      emit({
+        event: "user",
+        data: {
+          id: user.id,
+          name: user.name,
+          avatar: user.avatar,
+          // Don't send: password, email, tokens, etc.
+        }
       });
     });
 
@@ -1543,13 +2194,18 @@ export const GET = () => {
       const interval = setInterval(async () => {
         try {
           const data = await fetchExternalAPI();
-          emit("data", data);
+          emit({ event: "data", data });
         } catch (error) {
           // Log internally
           console.error("[SSE] Error fetching data:", error);
           
           // Send generic error to client
-          emit("error", {
+          emit({
+            event: "error",
+            data: {
+              message: "Failed to fetch data. Retrying...",
+            }
+          });
             message: "Failed to fetch data. Please try again.",
             // Don't send: error.stack, internal details
           });
@@ -2153,16 +2809,259 @@ export const GET = ({ locals, cookies }) => {
 ### Technical Questions
 
 <details>
+<summary><strong>Q: How does message replay work on reconnection?</strong></summary>
+
+**A:** The system uses global sequence IDs to track and replay missed messages:
+
+1. **Each message gets a unique sequential ID** when emitted
+2. **Client tracks the last ID received** in `lastEventID` state
+3. **On reconnect, client sends Last-Event-ID** (header or query param)
+4. **Server replays all messages after that ID** from the history buffer
+
+```typescript
+// Server automatically assigns IDs
+const emitWithHistory = createEmitWithHistory({ sessionID, emit });
+emitWithHistory({ event: "chat", data: { text: "Hello" } });
+// → Sent with id: 42
+
+// Client receives and tracks
+// lastEventID = "42"
+
+// On network drop + reconnect:
+// Client: GET /api/events?lastEventID=42
+// Server: Replays messages 43, 44, 45...
+```
+
+**Benefits:**
+- No message loss during brief disconnections
+- Deterministic ordering
+- Works automatically with browser native reconnection
+</details>
+
+<details>
+<summary><strong>Q: What is "topic safety" and why does it matter?</strong></summary>
+
+**A:** Topic safety prevents data inconsistency when dynamically changing subscriptions.
+
+**The Problem:**
+```typescript
+// Connection 1: subscribed to ["chat"]
+// Last-Event-ID: 100
+
+// User enables notifications
+// Connection 2: subscribed to ["chat", "notifications"]
+// If we just replay from ID 100...
+// → We'd miss all notifications sent before ID 100!
+```
+
+**The Solution:**
+Server analyzes which topics are NEW vs. SAFE:
+- **Safe topics** (previously subscribed): Replay from Last-Event-ID
+- **New topics** (just added): Replay entire history
+
+```typescript
+const { safeTopics, newTopics } = analyzeTopicSafety(
+  sessionID,
+  ["chat", "notifications"] // Current request
+);
+// safeTopics: ["chat"] → delta replay
+// newTopics: ["notifications"] → full replay
+```
+
+This ensures you get all notification history even if they were sent while you had them disabled.
+</details>
+
+<details>
+<summary><strong>Q: How do I dynamically add/remove topics?</strong></summary>
+
+**A:** Use the `updateTopics` method:
+
+```typescript
+const stream = new SSEClient<Topics>("/api/events", {
+  topics: {
+    chat: (msg) => console.log(msg)
+  }
+});
+
+// Add notifications later
+stream.updateTopics({
+  addTopics: ["notifications"]
+});
+// → Closes current connection
+// → Opens new with topics=chat,notifications
+// → Server replays missed notifications
+
+// Remove chat
+stream.updateTopics({
+  removeTopics: ["chat"]
+});
+
+// Replace all topics
+stream.updateTopics({
+  nextTopics: {
+    logs: (log) => console.log(log)
+  }
+});
+```
+
+The `lastEventID` is automatically preserved across topic changes for intelligent replay.
+</details>
+
+<details>
+<summary><strong>Q: What are per-topic message counters used for?</strong></summary>
+
+**A:** The `topicCounters` property tracks how many messages were received per topic:
+
+```typescript
+const stream = new SSEClient<Topics>("/api/events", {
+  topics: {
+    chat: (msg) => handleChat(msg),
+    notifications: (n) => handleNotification(n)
+  }
+});
+
+// Access counters reactively
+console.log(stream.topicCounters.chat); // 42
+console.log(stream.topicCounters.notifications); // 7
+```
+
+**Use cases:**
+- Show unread counts: "3 new notifications"
+- Activity indicators: "127 messages in #general"
+- Debug: Verify events are being received
+- Analytics: Track topic usage
+
+Example UI:
+```svelte
+<button>
+  Notifications
+  {#if stream.topicCounters.notifications > 0}
+    <badge>{stream.topicCounters.notifications}</badge>
+  {/if}
+</button>
+```
+</details>
+
+<details>
+<summary><strong>Q: How large should my history buffer be?</strong></summary>
+
+**A:** It depends on your use case:
+
+**Small buffer (50-100 messages):**
+- ✅ Low memory usage
+- ✅ Fast replay
+- ❌ Only covers brief disconnections (few seconds)
+
+**Large buffer (1000+ messages):**
+- ✅ Covers longer disconnections
+- ✅ Better user experience
+- ❌ Higher memory usage per session
+
+**Best practice:** Use a ring buffer with TTL:
+
+```typescript
+const MAX_HISTORY_SIZE = 100;
+const MAX_HISTORY_AGE = 5 * 60 * 1000; // 5 minutes
+
+function pushMessage({ sessionID, topic, data }) {
+  const session = getSession(sessionID);
+  
+  // Add message
+  session.history.push({
+    id: String(globalSequenceID++),
+    topic,
+    data,
+    timestamp: Date.now(),
+  });
+  
+  // Remove old messages (by size)
+  if (session.history.length > MAX_HISTORY_SIZE) {
+    session.history.shift();
+  }
+  
+  // Remove old messages (by age)
+  const now = Date.now();
+  session.history = session.history.filter(
+    (msg) => now - msg.timestamp < MAX_HISTORY_AGE
+  );
+}
+```
+
+**For production:** Consider persisting to Redis or a database for longer retention.
+</details>
+
+<details>
+<summary><strong>Q: Can I use SSE across multiple server instances?</strong></summary>
+
+**A:** Yes, but you need centralized state management:
+
+**Problem:** Each server instance has its own memory
+- Session A connects to Server 1
+- Session A reconnects → load balancer sends to Server 2
+- Server 2 has no history for Session A
+
+**Solution 1: Sticky sessions** (load balancer)
+```nginx
+# Nginx
+upstream backend {
+  ip_hash; # Routes same IP to same server
+  server backend1:3000;
+  server backend2:3000;
+}
+```
+
+**Solution 2: Shared state** (Redis)
+```typescript
+import { Redis } from "ioredis";
+const redis = new Redis();
+
+// Store history in Redis
+function pushMessage({ sessionID, topic, data }) {
+  const message = {
+    id: String(Date.now()),
+    topic,
+    data,
+  };
+  
+  redis.lpush(`history:${sessionID}`, JSON.stringify(message));
+  redis.ltrim(`history:${sessionID}`, 0, 99); // Keep last 100
+  redis.expire(`history:${sessionID}`, 300); // 5 min TTL
+}
+
+// Retrieve on reconnect
+async function getHistory(sessionID: string) {
+  const items = await redis.lrange(`history:${sessionID}`, 0, -1);
+  return items.map((item) => JSON.parse(item));
+}
+```
+
+**Solution 3: Pub/Sub** (for live messages)
+```typescript
+// Server 1 emits event
+redis.publish("events:chat", JSON.stringify(message));
+
+// All servers listen
+redis.subscribe("events:chat");
+redis.on("message", (channel, message) => {
+  // Forward to connected clients on this instance
+  broadcastToLocalClients(JSON.parse(message));
+});
+```
+</details>
+
+<details>
 <summary><strong>Q: What's the difference between SSEClient and EventSource?</strong></summary>
 
 **A:** `SSEClient` is a wrapper around the browser's native `EventSource` API with additional features:
-- ✅ Reactive state with Svelte runes
-- ✅ Type-safe topics
-- ✅ Automatic reconnection handling
-- ✅ Debug mode
+- ✅ Reactive state with Svelte runes ($state)
+- ✅ Type-safe topics with TypeScript generics
+- ✅ Automatic Last-Event-ID tracking across topic changes
+- ✅ Dynamic topic updates (updateTopics method)
+- ✅ Per-topic message counters
+- ✅ Debug mode with detailed logging
 - ✅ URL-based topic subscription
 
-`EventSource` is the low-level browser API.
+`EventSource` is the low-level browser API that only provides basic SSE functionality.
 </details>
 
 <details>
@@ -2175,17 +3074,23 @@ export const GET = ({ locals, cookies }) => {
 
 ```typescript
 // ❌ BAD: Binary not supported
-emit("image", binaryImageData);
+emit({ event: "image", data: binaryImageData });
 
 // ✅ OPTION 1: Base64 encode
-emit("image", {
-  data: Buffer.from(binaryImageData).toString("base64"),
-  type: "image/png",
+emit({
+  event: "image",
+  data: {
+    data: Buffer.from(binaryImageData).toString("base64"),
+    type: "image/png",
+  }
 });
 
 // ✅ OPTION 2: Send URL instead
-emit("image", {
-  url: "/api/images/123.png",
+emit({
+  event: "image",
+  data: {
+    url: "/api/images/123.png",
+  }
 });
 ```
 </details>
@@ -2680,6 +3585,8 @@ Contributions are welcome! Feel free to:
 - Progress tracking
 - AI streaming responses
 - One-way data flow from server to client
+- Applications that need message replay on reconnection
+- Dynamic topic subscriptions
 
 ❌ **Not ideal for:**
 - Bidirectional chat (use WebSocket)
@@ -2692,11 +3599,30 @@ Contributions are welcome! Feel free to:
 1. **Use one connection with multiple topics** instead of multiple connections
 2. **Always implement cleanup functions** to prevent memory leaks
 3. **Add authentication and rate limiting** for production
-4. **Handle reconnection gracefully** with proper state restoration
+4. **Handle reconnection gracefully** with proper state restoration and message replay
 5. **Type your topics** for compile-time safety
 6. **Monitor active connections** in production
 7. **Use debug mode** during development
 8. **Test with slow networks** to ensure resilience
+9. **Implement message history** for reliable delivery
+10. **Use topic safety analysis** when dynamically changing subscriptions
+11. **Track message counters** for activity monitoring
+12. **Leverage global sequence IDs** for deterministic replay
+
+### Advanced Features Checklist
+
+When implementing SSE in production, consider these features:
+
+- ✅ **Message replay** — No data loss on reconnection
+- ✅ **Topic safety** — Smart handling of dynamic topic changes
+- ✅ **Session persistence** — Survive page reloads
+- ✅ **Global sequence IDs** — Deterministic message ordering
+- ✅ **Ring buffer history** — Configurable message retention
+- ✅ **Per-topic counters** — Activity tracking
+- ✅ **Dynamic subscriptions** — Add/remove topics at runtime
+- ✅ **Keep-alive** — Maintain connection through proxies
+- ✅ **Type safety** — Compile-time validation
+- ✅ **Debug mode** — Development visibility
 
 ### Architecture Patterns
 
@@ -2714,6 +3640,17 @@ Client → POST(/api/messages) → Server (send)
 **Scalable pattern (with pub/sub):**
 ```
 Client ← SSE → App Server ← Redis Pub/Sub → Background Workers
+```
+
+**With message replay:**
+```
+Client (reconnect with Last-Event-ID: 42)
+  ↓
+Server checks history buffer
+  ↓
+Replays messages 43, 44, 45...
+  ↓
+Resumes live stream from 46+
 ```
 
 ## 📄 License
