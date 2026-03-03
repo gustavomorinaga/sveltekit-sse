@@ -13,7 +13,7 @@
     <Toolbar />
 
     <div
-      class="flex flex-1 gap-4 max-h-[calc(100svh-104px-3rem)] [&>div]:flex [&>div]:flex-1 [&>div]:min-h-0"
+      class="flex flex-1 flex-col gap-4 [&>div]:flex [&>div]:flex-1 [&>div]:max-h-[50svh] [&>div]:min-h-0 lg:flex-row lg:max-h-[calc(100svh-104px-3rem)] lg:[&>div]:max-h-none"
     >
       <div>
         <Chat />
