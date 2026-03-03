@@ -14,13 +14,13 @@
 
 <section class="flex flex-1 flex-col rounded bg-zinc-800">
   <header
-    class="flex items-center justify-between p-4 border-b border-zinc-900"
+    class="flex items-center justify-between p-4 border-b border-zinc-900 [&>div]:flex"
   >
-    <div class="flex">
+    <div>
       <h3 class="text-lg font-bold">🔔 Notifications</h3>
     </div>
 
-    <div class="flex gap-2">
+    <div>
       <button
         class="cursor-pointer px-3 py-1.5 bg-red-500 text-white rounded hover:bg-red-600 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
         disabled={!eventsContext.notifications.length}
@@ -37,7 +37,7 @@
       {#each eventsContext.notifications as notification (notification.id)}
         <li class="contents">
           <div
-            class="p-4 bg-zinc-700 rounded shadow data-[type=info]:border-blue-400 data-[type=error]:border-red-400 border-l-4"
+            class="p-2 bg-zinc-700 rounded shadow data-[type=info]:border-blue-400 data-[type=error]:border-red-400 border-l-4"
             data-type={notification.type}
             in:slide={{ axis: "y" }}
             out:fade

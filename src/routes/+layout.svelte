@@ -1,6 +1,6 @@
 <script lang="ts">
   import { asset } from "$app/paths";
-  import "./layout.css";
+  import "$lib/styles/global.css";
 
   let { children } = $props();
 </script>

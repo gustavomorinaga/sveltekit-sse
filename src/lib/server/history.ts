@@ -1,90 +1,83 @@
 /**
  * Server-Sent Events History Manager
  *
- * This module manages the history of SSE messages for each session, enabling
- * message recovery when clients reconnect after a connection drop.
+ * This module manages the history of SSE messages for each session using a
+ * **Global Sequence ID** strategy. Every message emitted to a connection
+ * receives a monotonically-increasing integer ID, regardless of topic.
+ *
+ * This solves the native browser limitation where `EventSource` stores only
+ * the single latest `Last-Event-ID`, which would be ambiguous if each topic
+ * maintained its own counter.
  *
  * Key features:
- * - Stores messages per session with unique IDs
- * - Allows retrieval of missed messages since a given ID
- * - Automatically manages memory by limiting history size per session
- * - Provides session cleanup for inactive connections
+ * - Monotonically-increasing global integer IDs per session (e.g. "0", "1", "2")
+ * - `getMessagesSince` uses numeric comparison (> lastSeq) instead of exact match
+ * - Topic subscription registry: tracks which topics a session was subscribed to
+ *   so the reconnect handler can detect newly-added topics and replay their full
+ *   history rather than only messages since Last-Event-ID
+ * - Automatic memory management (ring buffer per session)
+ * - Periodic cleanup of inactive sessions
  */
 
 export interface SSEMessage<T = unknown> {
-  /** Unique identifier for this message (monotonically increasing per session) */
+  /** Global monotonically-increasing integer (as string) for this session */
   id: string;
   /** The event/topic name */
   topic: string;
   /** The message payload */
   data: T;
-  /** Timestamp when the message was created */
+  /** Unix ms timestamp */
   timestamp: number;
 }
 
 export interface PushMessageOptions<T = unknown> {
-  /** The session identifier */
   sessionID: string;
-  /** The event/topic name */
   topic: string;
-  /** The message payload */
   data: T;
 }
 
 interface SessionHistory {
-  /** Sequential messages for this session */
+  /** All stored messages in insertion order */
   messages: SSEMessage[];
-  /** Counter for generating sequential IDs */
-  counter: number;
-  /** Last access time for cleanup purposes */
+  /** Next ID to assign (starts at 0) */
+  nextSeq: number;
+  /** Last access time for GC */
   lastAccess: number;
+  /** Topics the client was subscribed to on the *last* connection */
+  subscribedTopics: string[];
 }
 
-// Configuration
-const MAX_MESSAGES_PER_SESSION = 100;
-const SESSION_CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
-const SESSION_INACTIVITY_TIMEOUT = 30 * 60 * 1000; // 30 minutes
+// ─── Configuration ─────────────────────────────────────────────────────────
+const MAX_MESSAGES_PER_SESSION = 200;
+const SESSION_CLEANUP_INTERVAL = 5 * 60 * 1_000; // 5 min
+const SESSION_INACTIVITY_TIMEOUT = 30 * 60 * 1_000; // 30 min
 
-/** Map of session ID to their message history */
 const sessionsHistory = new Map<string, SessionHistory>();
 
-/**
- * Generates a unique message ID for a session.
- * Uses a counter-based approach for predictable ordering.
- */
-function generateMessageID(sessionID: string): string {
-  const session = getOrCreateSession(sessionID);
-  const id = `${sessionID}-${session.counter}`;
-  session.counter++;
-  return id;
-}
+// ─── Internal helpers ──────────────────────────────────────────────────────
 
-/**
- * Gets or creates a session history entry.
- */
 function getOrCreateSession(sessionID: string): SessionHistory {
-  if (!sessionsHistory.has(sessionID)) {
-    sessionsHistory.set(sessionID, {
+  let session = sessionsHistory.get(sessionID);
+  if (!session) {
+    session = {
       messages: [],
-      counter: 0,
+      nextSeq: 0,
       lastAccess: Date.now(),
-    });
+      subscribedTopics: [],
+    };
+    sessionsHistory.set(sessionID, session);
   }
-
-  const session = sessionsHistory.get(sessionID);
-  if (!session) throw new Error(`Failed to create session ${sessionID}`);
-
   session.lastAccess = Date.now();
   return session;
 }
 
+// ─── Public API ────────────────────────────────────────────────────────────
+
 /**
- * Adds a message to the session history and returns the message with its ID.
- *
- * @param options - Configuration object containing sessionID, topic, and data
- * @returns The stored message with its unique ID
+ * Appends a message to the session ring-buffer and returns the stored record
+ * with its assigned global sequence ID.
  */
-// biome-ignore lint/suspicious/noExplicitAny: Generic type needs to accept any payload
+// biome-ignore lint/suspicious/noExplicitAny: Generic type
 export function pushMessage<T = any>({
   sessionID,
   topic,
@@ -93,7 +86,7 @@ export function pushMessage<T = any>({
   const session = getOrCreateSession(sessionID);
 
   const message: SSEMessage<T> = {
-    id: generateMessageID(sessionID),
+    id: String(session.nextSeq++),
     topic,
     data,
     timestamp: Date.now(),
@@ -101,7 +94,7 @@ export function pushMessage<T = any>({
 
   session.messages.push(message);
 
-  // Keep only the most recent messages to avoid memory issues
+  // Ring-buffer: evict oldest messages when over capacity
   if (session.messages.length > MAX_MESSAGES_PER_SESSION) {
     session.messages.shift();
   }
@@ -110,12 +103,12 @@ export function pushMessage<T = any>({
 }
 
 /**
- * Retrieves all messages that were sent after the specified message ID.
- * This is used for message recovery when a client reconnects.
+ * Returns all messages whose global sequence ID is strictly greater than
+ * `lastEventID` (parsed as a non-negative integer).
  *
- * @param sessionID - The session identifier
- * @param lastEventID - The ID of the last message the client received
- * @returns Array of messages sent after the given ID, or empty if ID not found
+ * Returns `[]` when:
+ * - The session does not exist
+ * - `lastEventID` is not a valid integer string
  */
 export function getMessagesSince(
   sessionID: string,
@@ -126,83 +119,110 @@ export function getMessagesSince(
 
   session.lastAccess = Date.now();
 
-  // Find the index of the last received message
-  const lastIndex = session.messages.findIndex((msg) => msg.id === lastEventID);
+  const lastSeq = Number.parseInt(lastEventID, 10);
+  if (Number.isNaN(lastSeq)) return [];
 
-  // If the ID is not found (too old or invalid), return empty array
-  // The client will receive new messages from this point forward
-  if (lastIndex === -1) return [];
-
-  // Return all messages after the last received one
-  return session.messages.slice(lastIndex + 1);
+  return session.messages.filter(
+    (msg) => Number.parseInt(msg.id, 10) > lastSeq
+  );
 }
 
 /**
- * Gets the entire message history for a session.
- * Useful for initial connection to restore state.
- *
- * @param sessionID - The session identifier
- * @returns Array of all stored messages for the session
+ * Returns a snapshot of the full message history for `sessionID`.
+ * Used when replaying all messages for newly-added topics.
  */
 export function getSessionHistory(sessionID: string): SSEMessage[] {
   const session = sessionsHistory.get(sessionID);
   if (!session) return [];
-
   session.lastAccess = Date.now();
   return [...session.messages];
 }
 
 /**
  * Clears the history for a specific session.
- *
- * @param sessionID - The session identifier
  */
 export function clearSessionHistory(sessionID: string): void {
   sessionsHistory.delete(sessionID);
 }
 
+// ─── Topic Subscription Registry ───────────────────────────────────────────
+
 /**
- * Cleans up inactive sessions to prevent memory leaks.
- * Automatically runs periodically.
+ * Returns the topic list registered for the last known connection of
+ * `sessionID`, or `null` if the session has never connected.
  */
-function cleanupInactiveSessions(): void {
-  const now = Date.now();
-  const sessionsToDelete: string[] = [];
-
-  for (const [sessionId, session] of sessionsHistory.entries()) {
-    const inactiveDuration = now - session.lastAccess;
-    if (inactiveDuration > SESSION_INACTIVITY_TIMEOUT) {
-      sessionsToDelete.push(sessionId);
-    }
-  }
-
-  for (const sessionID of sessionsToDelete) sessionsHistory.delete(sessionID);
-
-  if (sessionsToDelete.length > 0) {
-    console.log(
-      `[SSE History] Cleaned up ${sessionsToDelete.length} inactive session(s)`
-    );
-  }
+export function getTopicSubscription(sessionID: string): string[] | null {
+  const session = sessionsHistory.get(sessionID);
+  if (!session) return null;
+  return [...session.subscribedTopics];
 }
 
-// Start periodic cleanup
-setInterval(cleanupInactiveSessions, SESSION_CLEANUP_INTERVAL);
+/**
+ * Overwrites the tracked topic subscription list for `sessionID`.
+ * Call this after a connection is fully set up so subsequent reconnects know
+ * which topics were "known" vs "newly-added".
+ */
+export function setTopicSubscription(
+  sessionID: string,
+  topics: string[]
+): void {
+  const session = getOrCreateSession(sessionID);
+  session.subscribedTopics = [...topics];
+}
 
 /**
- * Gets statistics about the current history state.
- * Useful for monitoring and debugging.
+ * Returns a breakdown of which requested topics are safe to replay from
+ * `lastEventID` (already known) and which require a full history rewind
+ * (newly added after the last subscription).
+ *
+ * **Safe replay**  = only messages with ID > lastEventID
+ * **Full replay**  = all available history for that topic
  */
+export function analyzeTopicSafety(
+  sessionID: string,
+  requestedTopics: string[]
+): { safeTopics: string[]; newTopics: string[] } {
+  const previous = getTopicSubscription(sessionID);
+
+  // No previous subscription record → treat all as safe
+  // (caller won't have a lastEventID either, so replay is a no-op anyway)
+  if (!previous || previous.length === 0) {
+    return { safeTopics: requestedTopics, newTopics: [] };
+  }
+
+  const safeTopics = requestedTopics.filter((t) => previous.includes(t));
+  const newTopics = requestedTopics.filter((t) => !previous.includes(t));
+
+  return { safeTopics, newTopics };
+}
+
+// ─── Diagnostics ───────────────────────────────────────────────────────────
+
 export function getHistoryStats() {
   const sessions = Array.from(sessionsHistory.entries()).map(
     ([id, session]) => ({
       sessionId: id,
       messageCount: session.messages.length,
+      nextSeq: session.nextSeq,
+      subscribedTopics: session.subscribedTopics,
       lastAccess: new Date(session.lastAccess).toISOString(),
     })
   );
-
-  return {
-    totalSessions: sessionsHistory.size,
-    sessions,
-  };
+  return { totalSessions: sessionsHistory.size, sessions };
 }
+
+// ─── Periodic GC ───────────────────────────────────────────────────────────
+
+function cleanupInactiveSessions(): void {
+  const now = Date.now();
+  const toDelete: string[] = [];
+  for (const [id, session] of sessionsHistory.entries()) {
+    if (now - session.lastAccess > SESSION_INACTIVITY_TIMEOUT) toDelete.push(id);
+  }
+  for (const id of toDelete) sessionsHistory.delete(id);
+  if (toDelete.length > 0) {
+    console.log(`[SSE History] Cleaned ${toDelete.length} inactive session(s)`);
+  }
+}
+
+setInterval(cleanupInactiveSessions, SESSION_CLEANUP_INTERVAL);

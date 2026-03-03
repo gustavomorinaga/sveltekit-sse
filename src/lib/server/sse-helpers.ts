@@ -1,32 +1,53 @@
 /**
  * SSE Helper Functions
  *
- * This module provides utility functions for working with Server-Sent Events,
- * including message history tracking, replay functionality, and topic-specific handlers.
+ * Provides utilities for multi-topic SSE with a Global Sequence ID strategy:
+ *
+ * 1. `createEmitWithHistory` – wraps the raw emitter so every emission is
+ *    persisted to the ring-buffer with a global monotonic ID before being sent.
+ *
+ * 2. `replayMissedMessages` – smart reconnect handler that understands the
+ *    'Topic Safety Problem': if the client is now subscribing to a topic it
+ *    was NOT subscribed to before, the Last-Event-ID is not a safe replay
+ *    cursor for that topic, so the full history of that topic is replayed
+ *    first, followed by the missed messages for all other topics.
+ *
+ * 3. `handleChatTopics` – drives the interactive chat story engine.
+ *
+ * 4. `setupNotificationsPolling` – periodic mock notification sender.
+ *
+ * 5. `setupLogsPolling` – periodic mock log entry sender (new topic demo).
  */
 
+import { MOCK_LOGS } from "$lib/mock/logs.mock";
 import { SCRIPT } from "$lib/mock/chat.mock";
 import { MOCK_NOTIFICATIONS } from "$lib/mock/notifications.mock";
-import { getMessagesSince, pushMessage } from "./history";
+import {
+  analyzeTopicSafety,
+  getMessagesSince,
+  getSessionHistory,
+  pushMessage,
+} from "./history";
 import type { SSEEmitter } from "./sse";
 import { getSession, playStory } from "./story-engine";
 import type { SSETopicsMap } from "$lib/ts";
 
-const POLLING_DELAY = 3000;
+const NOTIFICATIONS_POLLING_DELAY = 3_000;
+const LOGS_POLLING_DELAY = 2_000;
+
+// ─── createEmitWithHistory ─────────────────────────────────────────────────
 
 export interface CreateEmitWithHistoryOptions {
-  /** The session identifier */
   sessionID: string;
-  /** The base SSE emitter function */
   emit: SSEEmitter<SSETopicsMap>;
 }
 
 /**
- * Creates an emit function that automatically saves messages to history.
- * This wrapper ensures every emitted message is persisted for potential replay.
- *
- * @param options - Configuration object containing sessionID and emit function
- * @returns A wrapped emitter that saves messages to history
+ * Returns a wrapped emitter that automatically persists every message to the
+ * session ring-buffer (with a global sequence ID) before sending it over the
+ * wire.  The `id:` field written to the SSE stream is the global sequence
+ * number, ensuring the browser's `Last-Event-ID` always reflects the most
+ * recently seen global position.
  */
 export function createEmitWithHistory({
   sessionID,
@@ -44,23 +65,29 @@ export function createEmitWithHistory({
   };
 }
 
+// ─── replayMissedMessages ──────────────────────────────────────────────────
+
 export interface ReplayMissedMessagesOptions {
-  /** The session identifier */
   sessionID: string;
-  /** The ID of the last message the client received */
+  /** The raw Last-Event-ID string from the request header or query param */
   lastEventID: string;
-  /** List of topics the client is subscribed to */
   requestedTopics: string[];
-  /** The SSE emitter function */
   emit: SSEEmitter<SSETopicsMap>;
 }
 
 /**
- * Replays missed messages to a reconnecting client.
- * When a client reconnects with a Last-Event-ID, this function retrieves
- * and resends all messages that were sent after that ID.
+ * Replays missed messages to a reconnecting client, handling the "Topic
+ * Safety Problem" automatically.
  *
- * @param options - Configuration object for replaying messages
+ * Algorithm:
+ * 1. Call `analyzeTopicSafety` to split `requestedTopics` into:
+ *    - `safeTopics`  – known from the previous connection → replay from lastSeq+1
+ *    - `newTopics`   – added after the last connection → replay ALL history
+ * 2. Build a merged, chronologically-ordered list:
+ *    - All stored messages that belong to `newTopics` (full rewind)
+ *    - All stored messages with globalID > lastEventID that belong to `safeTopics`
+ * 3. De-duplicate by ID (a new topic's message may also be > lastSeq) and
+ *    emit in insertion order.
  */
 export function replayMissedMessages({
   sessionID,
@@ -68,14 +95,50 @@ export function replayMissedMessages({
   requestedTopics,
   emit,
 }: ReplayMissedMessagesOptions): void {
-  const missedMessages = getMessagesSince(sessionID, lastEventID);
-  console.log(
-    `[SSE] Replaying ${missedMessages.length} missed message(s) for session ${sessionID}`
+  const { safeTopics, newTopics } = analyzeTopicSafety(
+    sessionID,
+    requestedTopics
   );
 
-  for (const msg of missedMessages) {
-    if (!requestedTopics.includes(msg.topic)) continue;
+  const allHistory = getSessionHistory(sessionID);
+  const missedSince = getMessagesSince(sessionID, lastEventID);
 
+  // Build a set of IDs already queued to avoid duplicates
+  const queued = new Set<string>();
+  const toReplay: typeof allHistory = [];
+
+  // Full-rewind for topics the client never subscribed to before
+  if (newTopics.length > 0) {
+    console.log(
+      `[SSE] New topics detected [${newTopics.join(", ")}] – full history rewind`
+    );
+    for (const msg of allHistory) {
+      if (!newTopics.includes(msg.topic)) continue;
+      if (queued.has(msg.id)) continue;
+      queued.add(msg.id);
+      toReplay.push(msg);
+    }
+  }
+
+  // Delta replay for topics that were already known
+  for (const msg of missedSince) {
+    if (!safeTopics.includes(msg.topic)) continue;
+    if (queued.has(msg.id)) continue;
+    queued.add(msg.id);
+    toReplay.push(msg);
+  }
+
+  // Sort merged list by global seq so the client sees events in order
+  toReplay.sort(
+    (a, b) => Number.parseInt(a.id, 10) - Number.parseInt(b.id, 10)
+  );
+
+  console.log(
+    `[SSE] Replaying ${toReplay.length} message(s) for session ${sessionID}` +
+      ` (new-topic full-rewind: ${newTopics.length > 0 ? newTopics.join(", ") : "none"})`
+  );
+
+  for (const msg of toReplay) {
     emit({
       event: msg.topic as keyof SSETopicsMap,
       data: msg.data as SSETopicsMap[keyof SSETopicsMap],
@@ -84,22 +147,18 @@ export function replayMissedMessages({
   }
 }
 
+// ─── handleChatTopics ──────────────────────────────────────────────────────
+
 export interface HandleChatTopicsOptions {
-  /** The session identifier */
   sessionID: string;
-  /** The ID of the last message (null for first connection) */
   lastEventID: string | null;
-  /** The history-aware emitter function */
   emitWithHistory: ReturnType<typeof createEmitWithHistory>;
-  /** The HTTP request object for abort signal handling */
   request: Request;
 }
 
 /**
  * Handles chat-related SSE logic.
  * Manages chat history restoration, prompt handling, and story progression.
- *
- * @param options - Configuration object for handling chat topics
  */
 export function handleChatTopics({
   sessionID,
@@ -109,12 +168,11 @@ export function handleChatTopics({
 }: HandleChatTopicsOptions): void {
   const session = getSession(sessionID);
 
-  // Send chat history only on first connection
+  // Send chat history only on first connection (not a reconnect)
   if (!lastEventID && session.history.length > 0) {
     emitWithHistory({ event: "history", data: session.history });
   }
 
-  // Check if waiting for player input
   const currentNode = SCRIPT[session.step];
   const isWaitingForPrompt = currentNode?.type === "prompt";
 
@@ -127,7 +185,9 @@ export function handleChatTopics({
         text: currentNode.text,
       },
     });
-  } else if (!lastEventID) playStory(sessionID);
+  } else if (!lastEventID) {
+    playStory(sessionID);
+  }
 
   request.signal.addEventListener("abort", () => {
     console.log(`[SSE] Connection aborted for session ${sessionID}`);
@@ -136,19 +196,15 @@ export function handleChatTopics({
   });
 }
 
+// ─── setupNotificationsPolling ─────────────────────────────────────────────
+
 export interface SetupNotificationsPollingOptions {
-  /** List of topics the client is subscribed to */
   requestedTopics: string[];
-  /** The history-aware emitter function */
   emitWithHistory: ReturnType<typeof createEmitWithHistory>;
 }
 
 /**
- * Sets up periodic polling for notifications.
- * Sends random mock notifications at regular intervals to subscribed clients.
- *
- * @param options - Configuration object for notifications polling
- * @returns An interval ID that can be used to stop the polling
+ * Sets up periodic polling for mock notifications.
  */
 export function setupNotificationsPolling({
   requestedTopics,
@@ -168,5 +224,37 @@ export function setupNotificationsPolling({
         timestamp: new Date().toLocaleTimeString(),
       },
     });
-  }, POLLING_DELAY);
+  }, NOTIFICATIONS_POLLING_DELAY);
+}
+
+// ─── setupLogsPolling ──────────────────────────────────────────────────────
+
+export interface SetupLogsPollingOptions {
+  requestedTopics: string[];
+  emitWithHistory: ReturnType<typeof createEmitWithHistory>;
+}
+
+/**
+ * Sets up periodic polling for mock system log entries.
+ * Demonstrates the third topic in the multi-topic SSE system.
+ */
+export function setupLogsPolling({
+  requestedTopics,
+  emitWithHistory,
+}: SetupLogsPollingOptions): ReturnType<typeof setInterval> {
+  return setInterval(() => {
+    if (!requestedTopics.includes("logs")) return;
+
+    const randomLog =
+      MOCK_LOGS[Math.floor(Math.random() * MOCK_LOGS.length)];
+
+    emitWithHistory({
+      event: "logs",
+      data: {
+        id: crypto.randomUUID(),
+        ...randomLog,
+        timestamp: new Date().toLocaleTimeString(),
+      },
+    });
+  }, LOGS_POLLING_DELAY);
 }
