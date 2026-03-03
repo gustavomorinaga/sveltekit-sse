@@ -82,9 +82,7 @@ class EventsContext {
         this.chat.unshift(data);
         this.ended = true;
       },
-      history: (data) => {
-        this.chat = [...data].reverse();
-      },
+      history: (data) => (this.chat = [...data].reverse()),
     };
 
     // ── Optional stream handlers ──────────────────────────────────────────
@@ -118,10 +116,25 @@ class EventsContext {
    * When a topic is ADDED the server will detect the new topic via the
    * `analyzeTopicSafety` mechanism and replay its full history before resuming
    * the delta stream.
+   *
+   * ⚠️  CRITICAL — when REMOVING a topic, the corresponding data array is
+   * cleared to prevent duplicate IDs when the topic is re-enabled (server
+   * replays full history, but old data would still be present).
+   *
+   * IMPORTANT: We mutate the existing array (.length = 0) instead of
+   * reassigning (= []) to preserve reactivity in components that have
+   * destructured the array reference from the context.
    */
   toggleTopic = (topic: StreamTopic) => {
-    if (this.activeTopics.has(topic)) this.activeTopics.delete(topic);
-    else this.activeTopics.add(topic);
+    const isRemoving = this.activeTopics.has(topic);
+
+    if (isRemoving) {
+      this.activeTopics.delete(topic);
+      // Clear data to prevent duplicate IDs on re-enable
+      // Mutate in-place to preserve references
+      if (topic === "notifications") this.notifications.length = 0;
+      if (topic === "logs") this.logs.length = 0;
+    } else this.activeTopics.add(topic);
 
     const nextTopics = [...this.activeTopics] as StreamTopic[];
 

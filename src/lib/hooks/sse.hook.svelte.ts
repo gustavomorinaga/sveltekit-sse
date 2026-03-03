@@ -224,10 +224,20 @@ export class SSEClient<TTopics extends Record<string, any>> {
       }
     }
 
+    const currentTopicKeys = Object.keys(currentTopics);
+    const nextTopicKeys = Object.keys(nextTopicHandlers);
+    const removedTopics = currentTopicKeys.filter(
+      (t) => !nextTopicKeys.includes(t)
+    );
+
+    // Clear counters for removed topics to avoid stale counts
+    for (const topic of removedTopics) delete this.topicCounters[topic];
+
     if (this.#options.debug) {
       this.#log("Updating topics", {
-        from: Object.keys(currentTopics),
-        to: Object.keys(nextTopicHandlers),
+        from: currentTopicKeys,
+        to: nextTopicKeys,
+        removed: removedTopics,
         lastEventId: this.lastEventID,
       });
     }

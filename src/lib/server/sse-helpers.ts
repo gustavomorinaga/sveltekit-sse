@@ -32,8 +32,8 @@ import type { SSEEmitter } from "./sse";
 import { getSession, playStory } from "./story-engine";
 import type { SSETopicsMap } from "$lib/ts";
 
-const NOTIFICATIONS_POLLING_DELAY = 3_000;
-const LOGS_POLLING_DELAY = 2_000;
+const NOTIFICATIONS_POLLING_DELAY = 3000;
+const LOGS_POLLING_DELAY = 2000;
 
 // ─── createEmitWithHistory ─────────────────────────────────────────────────
 
@@ -245,8 +245,7 @@ export function setupLogsPolling({
   return setInterval(() => {
     if (!requestedTopics.includes("logs")) return;
 
-    const randomLog =
-      MOCK_LOGS[Math.floor(Math.random() * MOCK_LOGS.length)];
+    const randomLog = MOCK_LOGS[Math.floor(Math.random() * MOCK_LOGS.length)];
 
     emitWithHistory({
       event: "logs",
