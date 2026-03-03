@@ -49,8 +49,8 @@ interface SessionHistory {
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 const MAX_MESSAGES_PER_SESSION = 200;
-const SESSION_CLEANUP_INTERVAL = 5 * 60 * 1_000; // 5 min
-const SESSION_INACTIVITY_TIMEOUT = 30 * 60 * 1_000; // 30 min
+const SESSION_CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 min
+const SESSION_INACTIVITY_TIMEOUT = 30 * 60 * 1000; // 30 min
 
 const sessionsHistory = new Map<string, SessionHistory>();
 
@@ -217,7 +217,8 @@ function cleanupInactiveSessions(): void {
   const now = Date.now();
   const toDelete: string[] = [];
   for (const [id, session] of sessionsHistory.entries()) {
-    if (now - session.lastAccess > SESSION_INACTIVITY_TIMEOUT) toDelete.push(id);
+    if (now - session.lastAccess > SESSION_INACTIVITY_TIMEOUT)
+      toDelete.push(id);
   }
   for (const id of toDelete) sessionsHistory.delete(id);
   if (toDelete.length > 0) {
