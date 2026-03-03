@@ -38,7 +38,7 @@ export function playStory(sessionId: string) {
         text: "End of the story.",
       };
       session.history.push(endMessage);
-      session.emitter("end", endMessage);
+      session.emitter({ event: "end", data: endMessage });
       return;
     }
 
@@ -51,7 +51,7 @@ export function playStory(sessionId: string) {
         text: node.text,
       };
       session.history.push(message);
-      session.emitter("message", message);
+      session.emitter({ event: "message", data: message });
       session.step++;
       session.timeoutID = setTimeout(nextNode, node.delay);
     } else if (node.type === "prompt") {
@@ -61,7 +61,7 @@ export function playStory(sessionId: string) {
         text: node.text,
       };
       // Don't add prompts to history - they're UI instructions, not chat messages
-      session.emitter("prompt", promptMessage);
+      session.emitter({ event: "prompt", data: promptMessage });
     }
   };
 

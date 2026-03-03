@@ -1,4 +1,5 @@
 import type { ChatMessage } from "./chat";
+import type { LogEntry } from "./log";
 import type { Notification } from "./notification";
 
 /**
@@ -13,4 +14,6 @@ export interface SSETopicsMap {
   history: ChatMessage[];
   // Notification-related topics
   notifications: Notification;
+  // Log-related topics
+  logs: LogEntry;
 }
