@@ -62,6 +62,12 @@ export function produceSSE<TTopics extends Record<string, any>>(
           let payload = "";
           if (id) payload += `id: ${id}\n`;
           payload += `event: ${String(event)}\ndata: ${JSON.stringify(data)}\n\n`;
+
+          // Log every message being sent with its ID
+          console.log(
+            `[SSE] Sending event "${String(event)}" ${id ? `with id: ${id}` : "WITHOUT ID"}`
+          );
+
           controller.enqueue(encoder.encode(payload));
         } catch (error) {
           console.error("[SSE] Error emitting event:", error);

@@ -1,7 +1,6 @@
 // biome-ignore lint/suspicious/noExplicitAny: Generic type needs to accept any shape of topics map
 export interface SSEOptions<TTopics extends Record<string, any>> {
   topics: { [K in keyof TTopics]?: (data: TTopics[K]) => void };
-  reconnectWait?: number;
   autoConnect?: boolean;
   debug?: boolean;
 }
@@ -14,11 +13,10 @@ export class SSEClient<TTopics extends Record<string, any>> {
   readonly #baseURL: string;
   readonly #options: SSEOptions<TTopics>;
   #eventSource: EventSource | null = null;
-  #reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(baseURL: string, options: SSEOptions<TTopics>) {
     this.#baseURL = baseURL;
-    this.#options = { reconnectWait: 3000, autoConnect: true, ...options };
+    this.#options = { autoConnect: true, ...options };
 
     if (this.#options.autoConnect) this.status = "connecting";
 
@@ -31,7 +29,14 @@ export class SSEClient<TTopics extends Record<string, any>> {
   }
 
   connect = () => {
-    this.close();
+    // Don't create multiple connections
+    const isConnectionActive =
+      this.#eventSource?.readyState === EventSource.OPEN ||
+      this.#eventSource?.readyState === EventSource.CONNECTING;
+    if (isConnectionActive) {
+      this.#log("Connection already active, skipping");
+      return;
+    }
 
     this.status = "connecting";
 
@@ -57,19 +62,37 @@ export class SSEClient<TTopics extends Record<string, any>> {
       this.#eventSource.addEventListener(topic as string, (event) => {
         try {
           const parsedData: TTopics[keyof TTopics] = JSON.parse(event.data);
-          this.#log(`Event received on topic "${topic as string}"`, parsedData);
+
+          if (this.#options.debug) {
+            this.#log(`Event received on topic "${topic as string}"`, {
+              data: parsedData,
+              lastEventId: event.lastEventId,
+              eventSource_lastEventId: this.#eventSource?.url,
+            });
+          }
+
           callback(parsedData);
-        } catch (err) {
-          console.error("[SSE] Failed to parse message data:", err);
+        } catch (error) {
+          console.error("[SSE] Failed to parse message data:", error);
         }
       });
     }
 
-    this.#eventSource.onerror = () => this.#handleError();
+    // EventSource natively handles reconnection and sends Last-Event-ID automatically
+    // We just update the UI state when there's an error
+    this.#eventSource.onerror = (error) => {
+      this.status = "error";
+      this.error = new Error(
+        "Connection lost. Browser will reconnect automatically..."
+      );
+      this.#log(
+        "SSE connection error - browser will auto-reconnect with Last-Event-ID",
+        error
+      );
+    };
   };
 
   close = () => {
-    if (this.#reconnectTimer) clearTimeout(this.#reconnectTimer);
     if (this.#eventSource) {
       this.#eventSource.close();
       this.#eventSource = null;
@@ -77,19 +100,6 @@ export class SSEClient<TTopics extends Record<string, any>> {
     }
     this.status = "idle";
   };
-
-  #handleError() {
-    this.status = "error";
-    this.error = new Error("Connection lost. Attempting to reconnect...");
-    this.#log("SSE connection error", {
-      reconnectIn: `${this.#options.reconnectWait}ms`,
-    });
-    this.close();
-    this.#reconnectTimer = setTimeout(
-      this.connect,
-      this.#options.reconnectWait
-    );
-  }
 
   #log(message: string, data?: unknown) {
     if (!this.#options.debug) return;

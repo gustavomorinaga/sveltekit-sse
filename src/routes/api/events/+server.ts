@@ -18,11 +18,10 @@ export const GET = ({ cookies, request, url }) => {
     cookies.set("story_session", sessionID, { path: "/", httpOnly: true });
   }
 
-  if (lastEventID) {
-    console.log(
-      `[SSE] Client reconnected with Last-Event-ID: ${lastEventID} for session ${sessionID}`
-    );
-  }
+  console.log(
+    `[SSE] Connection ${lastEventID ? "RECONNECT" : "NEW"} for session ${sessionID}`,
+    lastEventID ? `Last-Event-ID: ${lastEventID}` : "No Last-Event-ID header"
+  );
 
   return produceSSE<SSETopicsMap>((emit) => {
     const session = getSession(sessionID);

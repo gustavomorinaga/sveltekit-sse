@@ -1,5 +1,6 @@
 import { getContext, setContext } from "svelte";
 
+import { dev } from "$app/environment";
 import { resolve } from "$app/paths";
 import { SSEClient } from "$lib/hooks/sse.hook.svelte";
 import type { ChatMessage, Notification, SSETopicsMap } from "$lib/ts";
@@ -8,6 +9,7 @@ const NOTIFICATIONS_LIMIT = 5;
 
 class EventsContext {
   readonly stream = new SSEClient<SSETopicsMap>(resolve("/api/events"), {
+    debug: dev,
     topics: {
       // Chat Events
       message: (data) => this.chat.unshift(data),
